@@ -2,6 +2,8 @@
 
 #include "lib/libical/include/libical/ical.h"
 
+icalcomponent *events; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
+
 typedef unsigned int uint;
 typedef unsigned int ushort;
 typedef unsigned int ulong;
@@ -99,10 +101,22 @@ bool
 time_is_ok(icaltimetype start_t, icaltimetype end_t){
 	// TODO STARTHERE to do this, we probably need to add all the logic about saving the whole calendar inside the program ( and maybe loading it etc. )
 }
+/*
+bool
+time_is_ok_in_eventrange(icaltimetype start_t, icaltimetype end_t, uint min_event_index, uint max_event_index){
+	//if (events[min_event_index], )
+	//return time_is_ok_in_eventrange(start_t, end_t, min_event_index, max_event_index);
+}
+*/
 
 int
 main(void){
-	printf("hallo welt\n");
+	icalcomponent *event;
+	icalproperty *prop;
+	icalparameter *param;
+	struct icaltimetype atime;
 
+	event = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
+	
 	return 0;
 }
