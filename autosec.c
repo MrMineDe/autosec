@@ -33,9 +33,9 @@ struct
 needs{
 	uint length; //complete length of all sessions
 	uint priority; // 0 is the top priority
-	uint session_length_min;
-	uint session_length_max;
-	uint session_length_pref;
+	uint session_len_min;
+	uint session_len_max;
+	uint session_len_pref;
 	icaltimetype earliest; //Frühestens anfangen mit sessions. This can be a date, but can also specify a time
 	icaltimetype latest; //The point, where everything should be done. This can be a date, but can also specify a time
 	//alle im datelist definierten Elemente, sind für Termine tabu.
@@ -82,8 +82,8 @@ init_datelist(datelist *d)
 }
 
 void
-init_needs(needs *n, uint length, uint priority, uint session_length_min, uint session_length_max,
-					 uint session_length_pref, icaltimetype earliest, icaltimetype latest,
+init_needs(needs *n, uint length, uint priority, uint session_len_min, uint session_len_max,
+					 uint session_len_pref, icaltimetype earliest, icaltimetype latest,
 					 uint max_per_day, uint max_per_week, uint max_per_month, uint max_per_year,
 					 uint min_per_day, uint min_per_week, uint min_per_month, uint min_per_year,
 					 uint pref_per_day, uint pref_per_week, uint pref_per_month, uint pref_per_year)
@@ -92,9 +92,9 @@ init_needs(needs *n, uint length, uint priority, uint session_length_min, uint s
 	n->priority = priority;
 	n->length = length;
 	n->priority = priority;
-	n->session_length_min = session_length_min;
-	n->session_length_max = session_length_max;
-	n->session_length_pref = session_length_pref;
+	n->session_len_min = session_len_min;
+	n->session_len_max = session_len_max;
+	n->session_len_pref = session_len_pref;
 	n->earliest = earliest;
 	n->latest = latest;
 	n->max_per_day= max_per_day;
@@ -212,9 +212,15 @@ timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t){
 	time_t session_len = end-start;
 	//session length
 	float length_val;
-	if(n.session_length_pref < session_len/60)
-		length_val = ((session_len-n.session_length_pref)*-1)/
-			           (float)(n.session_length_pref-n.session_length_min);
+	if(n.session_len_pref < session_len/60)
+		length_val = (session_len/60-n.session_len_pref)/
+			           (float)(n.session_len_max-n.session_len_pref);
+	else if (n.session_len_pref > session_len/60)
+		length_val = (n.session_len_pref-session_len/60)/
+			           (float)(n.session_len_pref-n.session_len_min);
+	else
+		length_val = 0;
+
 	//preferred dates/times
 	//TODO LATER maybe be more precise and allow "partial" in datelist to also be better.
 	float datelist_pref_val = 0;
@@ -266,7 +272,7 @@ timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t)
 	// Check:
 	// - time requirements are met
 	time_t len = icaltime_as_timet(end_t) - icaltime_as_timet(start_t);
-	if(len < n.length*60 || len < n.session_length_min*60 || len > n.session_length_max*60)
+	if(len < n.length*60 || len < n.session_len_min*60 || len > n.session_len_max*60)
 		return false;
 	return true;
 }
@@ -347,7 +353,7 @@ main(void){
 	icaltime_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 30, 0, 30, 30, 30, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 300, 0, 300, 300, 200, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
