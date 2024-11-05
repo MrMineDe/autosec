@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright Contributors to the libical project
+# SPDX-License-Identifier: LGPL-2.1-only OR MPL-2.0
+
+prefix=/home/mrmine/prg/autosec/lib/libical
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libical-glib
+Description: A GObject interface of the libical library
+Version: 3.0.95
+Requires: glib-2.0, gobject-2.0, libical
+Cflags: -I${includedir}
+Libs: -L${libdir} -lical-glib

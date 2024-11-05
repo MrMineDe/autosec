@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright Contributors to the libical project
+# SPDX-License-Identifier: LGPL-2.1-only OR MPL-2.0
+
+prefix=/home/mrmine/prg/autosec/lib/libical
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libical
+Description: An implementation of basic iCAL protocols
+Version: 3.0.95
+Libs: -L${libdir} -lical -licalss -licalvcal
+Libs.private: 
+Requires.private: icu-i18n
+Cflags: -I${includedir}
