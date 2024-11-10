@@ -15,3 +15,5 @@ bool timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t);
 bool time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t);
 bool time_is_in_datelist(datelist d, icaltimetype t);
 bool time_is_in_calendar(icaltimetype t);
+bool load_events_from_disk(char* path);
+char* custom_fgets(char* s, size_t size, void *d);

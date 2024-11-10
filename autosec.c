@@ -2,10 +2,12 @@
 #include <stdlib.h>
 
 #include "lib/libical/include/libical/ical.h"
+#include "lib/libical/include/libical/icalcomponent.h"
 
 #include "autosec.h"
 
-icalcomponent *events; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
+icalcomponent **events; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
+uint events_size = 0, events_max = 0;
 
 // TODO Does this work? Is this smart? Does not deal with Sommer/Winterzeit
 icaltimezone *zone;
@@ -197,8 +199,13 @@ event_new(needs n, icalcomponent *c)
 	icalproperty *prop;
 	prop = icalproperty_new_dtstart(possible_start_t[best_i]);
 	icalcomponent_add_property(c, prop);
+	icalproperty_free(prop);
 	prop = icalproperty_new_dtend(possible_end_t[best_i]);
 	icalcomponent_add_property(c, prop);
+	icalproperty_free(prop);
+	free(possible_start_t);
+	free(possible_end_t);
+	free(pref);
 	return true;
 }
 
@@ -341,10 +348,62 @@ time_is_in_calendar(icaltimetype t)
 	return false;
 }
 
+//This is a helper, that compares the date of 2 components. It is needed for qsort(), in sort_events()
+int
+events_compare_helper(icalcomponent *c1, icalcomponent *c2){
+	icaltime_compare()
+}
+
+//TODO MAYBE make it more modular, if needed
+//We want to split the events in evens and revents for repeating events. We need this for searching later on.
+void
+sort_events(){
+	qsort(events, events_size, events_max, compare_events_helper)
+}
+
+bool
+load_events_from_disk(char *path)
+{
+	FILE* f = fopen(path, "r");
+	if(f == NULL)
+		return false;
+	icalparser *p = icalparser_new();
+	icalparser_set_gen_data(p, f);
+	icalcomponent *component = icalparser_parse(p, *custom_fgets);
+	icalparser_free(p);
+	if(component == 0)
+		return false;
+	int new_events_count = icalcomponent_count_components(component, ICAL_VEVENT_COMPONENT);
+	if(events_size >= events_max){
+		events = realloc(events, sizeof(icalcomponent*)*(events_max+new_events_count+10));
+		events_max = events_max + new_events_count + 10;
+	}
+	//events[events_size] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
+	events[events_size++] = icalcomponent_get_first_component(component, ICAL_VEVENT_COMPONENT);
+	for(int i=1; i < new_events_count; i++){
+		events[events_size++] = icalcomponent_get_next_component(component, ICAL_VEVENT_COMPONENT);
+	}
+
+	for(int i=0; i < events_size; i++){
+		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(events[i]));
+	}
+	icalcomponent_free(component);
+	//fclose(f);
+	return true;
+}
+
+char*
+custom_fgets(char *s, size_t size, void *d)
+{
+    return fgets(s, size, (FILE*)d);
+}
+
 int
 main(void){
 	//first set the timezone
 	zone = icaltimezone_get_builtin_timezone_from_offset(1, "Berlin");
+
+	load_events_from_disk("test.ics");
 
 	icalcomponent *event;
 	//icalproperty *prop;
@@ -409,7 +468,13 @@ main(void){
 	printf("DTSTART: %s", icaltime_as_ical_string(icalproperty_get_dtstart(icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY))));
 	printf("DTEND  : %s", icaltime_as_ical_string(icalproperty_get_dtend(icalcomponent_get_next_property(event, ICAL_DTEND_PROPERTY))));
 
+	icalcomponent_free(event);
+
 	free(n.disallowed);
+	free(n.preferred);
+	//for(int i=0; i < events_size; i++)
+	//	free(events[i]);
+	free(events);
 	/*
 	prop = icalproperty_new_dtstamp(atime);
 	icalcomponent_add_property(event, prop);
