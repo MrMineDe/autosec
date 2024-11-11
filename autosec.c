@@ -141,7 +141,7 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 }
 
 // Here we want to analyze everything about a new event and make it into a event
-// We return false if we couldnt find any possible time TODO This needs to be refactored eventually. We do not respect pref because we linearly go through from the beginning to end until we find SOMETHING that fits.
+// We return false if we couldnt find any possible time TODO This needs to be refactored eventually.
 bool
 event_new(needs n, icalcomponent *c)
 {
@@ -162,8 +162,6 @@ event_new(needs n, icalcomponent *c)
 	int realloc_counter = 0;
 	while(icaltime_compare(end_t, n.latest) == -1){
 		if(timespan_is_ok(n, start_t, end_t)){
-			//TODO Test this! 
-			//TODO is 10 mallocs a good number? Maybe 100 or smth is more effective
 			// If possible_start_t etc. is not malloced enough, we needs to alloc more
 			if(possible_start_t_len==possible_start_t_max){
 				if(possible_start_t_max==0){
@@ -189,13 +187,42 @@ event_new(needs n, icalcomponent *c)
 		icaltime_copy(&start_t, icaltime_from_timet_with_zone(icaltime_as_timet(start_t)+60, 0, zone));
 		icaltime_copy(&end_t, icaltime_from_timet_with_zone(icaltime_as_timet(end_t)+60, 0, zone));
 	}
+	//TODO LATER This is not only not efficient, but also does not deliver good quality.
+	//There may often be times where better overall times were available, but we were not able to find them.
+
+	//We want to first take the first best time.
+	//Then, based on that, we search for the next best time, that also is compatible with the first time.
+	//This is repeated until we meet the time requirements.
 	if(possible_start_t_len == 0)
 		return false;
-	int best_i = 0;
-	for(int i=0; i < possible_start_t_len; i++){
-		if(pref[i] < pref[best_i])
-			best_i = i;
+	uint events_sum_len = 0;
+	int best_tm_i[possible_start_t_len];
+	for(int i=0; events_sum_len < latest; i++){
+		best_tm_i[i] = 0;
+		for(int j=0; j < possible_start_t_len; j++){
+			for(int k=0; k < i; i++){
+				if(timespans_ovlp(icaltime_as_timet(possible_start_t[best_tm_i[k]]),
+								  icaltime_as_timet(possible_end_t[best_tm_i[k]]),
+								  icaltime_as_timet(possible_start_t[j]),
+								  icaltime_as_timet(possible_end_t[j])))
+					continue;
+			}
+			if(pref[j] < pref[best_tm_i[i]])
+				best_tm_i[i] = i;
+		}
+		//Checks if anything as not overlapping. If everything overlapped, then we exit
+		if(i > 0){
+			if(best_tm_i[i] == best_tm_i[i-1]){
+				return false;
+			}
+		}
+		events_sum_len += icaltime_as_timet(possible_end_t[best_tm_i[i]]) -
+		                   icaltime_as_timet(possible_start_t[best_tm_i[i]]);
 	}
+	//TODO STARTHERE create a loop to create apropriate icalproperties
+	//If events_sum_len > latest müssen wir gucken wie wir am besten kürzen.
+	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
+	//Sonst irgendwie versuchen zwischen allen zu balancen.
 	icalproperty *prop;
 	prop = icalproperty_new_dtstart(possible_start_t[best_i]);
 	icalcomponent_add_property(c, prop);
@@ -212,7 +239,8 @@ event_new(needs n, icalcomponent *c)
 //TODO STARTHERE 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
-timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t){
+timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t)
+{
 	//Every option is evaluated beteen 0 and 1. Afterwards weighed and added
 	time_t start = icaltime_as_timet(start_t);
 	time_t end = icaltime_as_timet(end_t);
@@ -340,6 +368,18 @@ time_is_in_datelist(datelist d, icaltimetype t)
 	return true;
 }
 
+bool
+timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2)
+{
+	if(start1 > end1 || start2 > end2){
+		perror("timespans_ovlp(): illegal timespan inputs! Aborting!\n");
+		exit(1);
+	}
+	if(end1 < start2 || end2 < start1)
+		return false;
+	return true;
+}
+
 // This checks if a time t is not applicable because at that time the calendar already contains an event
 bool
 time_is_in_calendar(icaltimetype t)
@@ -350,7 +390,8 @@ time_is_in_calendar(icaltimetype t)
 
 //Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
 int
-events_compare_helper(const void *c1, const void *c2){
+events_compare_helper(const void *c1, const void *c2)
+{
 	icaltimetype t1 = icalproperty_get_dtstart(icalcomponent_get_first_property(*((icalcomponent**)c1), ICAL_DTSTART_PROPERTY));
 	icaltimetype t2 = icalproperty_get_dtstart(icalcomponent_get_first_property(*((icalcomponent**)c2), ICAL_DTSTART_PROPERTY));
 	return icaltime_compare(t1, t2);
@@ -358,7 +399,8 @@ events_compare_helper(const void *c1, const void *c2){
 
 //Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
 int
-revents_compare_helper(const void *c1, const void *c2){
+revents_compare_helper(const void *c1, const void *c2)
+{
 	icaltimetype t1 = icalproperty_get_dtend(icalcomponent_get_first_property(*((icalcomponent**)c1), ICAL_DTEND_PROPERTY));
 	icaltimetype t2 = icalproperty_get_dtend(icalcomponent_get_first_property(*((icalcomponent**)c2), ICAL_DTEND_PROPERTY));
 	return icaltime_compare(t1, t2);
@@ -423,7 +465,8 @@ custom_fgets(char *s, size_t size, void *d)
 }
 
 int
-main(void){
+main(void)
+{
 	//first set the timezone
 	zone = icaltimezone_get_builtin_timezone_from_offset(1, "Berlin");
 
