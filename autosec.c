@@ -6,8 +6,8 @@
 
 #include "autosec.h"
 
-icalcomponent **events; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
-uint events_size = 0, events_max = 0;
+icalcomponent **events, **revents; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
+uint events_count = 0, events_max = 0, revents_count = 0, revents_max = 0;
 
 // TODO Does this work? Is this smart? Does not deal with Sommer/Winterzeit
 icaltimezone *zone;
@@ -348,17 +348,20 @@ time_is_in_calendar(icaltimetype t)
 	return false;
 }
 
-//This is a helper, that compares the date of 2 components. It is needed for qsort(), in sort_events()
+//Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
 int
-events_compare_helper(icalcomponent *c1, icalcomponent *c2){
-	icaltime_compare()
+events_compare_helper(const void *c1, const void *c2){
+	icaltimetype t1 = icalproperty_get_dtstart(icalcomponent_get_first_property(*((icalcomponent**)c1), ICAL_DTSTART_PROPERTY));
+	icaltimetype t2 = icalproperty_get_dtstart(icalcomponent_get_first_property(*((icalcomponent**)c2), ICAL_DTSTART_PROPERTY));
+	return icaltime_compare(t1, t2);
 }
 
-//TODO MAYBE make it more modular, if needed
-//We want to split the events in evens and revents for repeating events. We need this for searching later on.
-void
-sort_events(){
-	qsort(events, events_size, events_max, compare_events_helper)
+//Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
+int
+revents_compare_helper(const void *c1, const void *c2){
+	icaltimetype t1 = icalproperty_get_dtend(icalcomponent_get_first_property(*((icalcomponent**)c1), ICAL_DTEND_PROPERTY));
+	icaltimetype t2 = icalproperty_get_dtend(icalcomponent_get_first_property(*((icalcomponent**)c2), ICAL_DTEND_PROPERTY));
+	return icaltime_compare(t1, t2);
 }
 
 bool
@@ -374,18 +377,39 @@ load_events_from_disk(char *path)
 	if(component == 0)
 		return false;
 	int new_events_count = icalcomponent_count_components(component, ICAL_VEVENT_COMPONENT);
-	if(events_size >= events_max){
+	//We want to avoid reallocs, so we add enough space for all of the new events in both events and revents if needed
+	if(events_count+new_events_count >= events_max){
 		events = realloc(events, sizeof(icalcomponent*)*(events_max+new_events_count+10));
 		events_max = events_max + new_events_count + 10;
 	}
-	//events[events_size] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
-	events[events_size++] = icalcomponent_get_first_component(component, ICAL_VEVENT_COMPONENT);
+	if(revents_count+new_events_count >= revents_max){
+		revents = realloc(revents, sizeof(icalcomponent*)*(revents_max+new_events_count+10));
+		revents_max = revents_max + new_events_count + 10;
+	}
+	//Now fill the events read from the file(in component) into events and revents, checking for recurring(rrule) tag each time
+	icalcomponent *vevent = icalcomponent_get_first_component(component, ICAL_VEVENT_COMPONENT);
+	if(icalcomponent_get_first_property(vevent, ICAL_RRULE_PROPERTY) == NULL)
+		events[events_count++] = vevent;
+	else
+		revents[revents_count++] = vevent;
 	for(int i=1; i < new_events_count; i++){
-		events[events_size++] = icalcomponent_get_next_component(component, ICAL_VEVENT_COMPONENT);
+		vevent = icalcomponent_get_next_component(component, ICAL_VEVENT_COMPONENT);
+		if(icalcomponent_get_first_property(vevent, ICAL_RRULE_PROPERTY) == NULL)
+			events[events_count++] = vevent;
+		else
+			revents[revents_count++] = vevent;
 	}
 
-	for(int i=0; i < events_size; i++){
+	qsort(events, events_count, sizeof(icaltimetype*), events_compare_helper);
+	qsort(revents, revents_count, sizeof(icaltimetype*), revents_compare_helper);
+
+	for(int i=0; i < events_count; i++){
 		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(events[i]));
+	}
+
+	printf(":::NOW REVENTS:::\n");
+	for(int i=0; i < revents_count; i++){
+		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(revents[i]));
 	}
 	icalcomponent_free(component);
 	//fclose(f);
@@ -466,7 +490,7 @@ main(void){
 		printf("Couldnt find a time for you. Sorry!\n");
 
 	printf("DTSTART: %s", icaltime_as_ical_string(icalproperty_get_dtstart(icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY))));
-	printf("DTEND  : %s", icaltime_as_ical_string(icalproperty_get_dtend(icalcomponent_get_next_property(event, ICAL_DTEND_PROPERTY))));
+	printf("DTEND  : %s\n", icaltime_as_ical_string(icalproperty_get_dtend(icalcomponent_get_next_property(event, ICAL_DTEND_PROPERTY))));
 
 	icalcomponent_free(event);
 
