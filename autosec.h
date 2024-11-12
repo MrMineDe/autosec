@@ -9,7 +9,7 @@ void init_needs(needs *n, uint length, uint priority, uint session_length_min, u
 					 uint pref_per_day, uint pref_per_week, uint pref_per_month, uint pref_per_year);
 bool is_array_false(bool *a, int a_len);
 void icaltime_copy(icaltimetype *dest, icaltimetype src);
-bool event_new(needs n, icalcomponent *c);
+icalcomponent ** event_new(needs n, int *c_len);
 float timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t);
 bool timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t);
 bool time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t);

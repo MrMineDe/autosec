@@ -141,9 +141,10 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 }
 
 // Here we want to analyze everything about a new event and make it into a event
-// We return false if we couldnt find any possible time TODO This needs to be refactored eventually.
-bool
-event_new(needs n, icalcomponent *c)
+// We return NULL if we couldnt find any possible time TODO This needs to be refactored eventually.
+// the icalcomponent **c array of pointers is returned with a "library malloc", so it has to be freed, by the calling function!
+icalcomponent **
+event_new(needs n, int *c_len)
 {
 	icaltimetype *possible_start_t, *possible_end_t;
 	int *pref;
@@ -156,7 +157,8 @@ event_new(needs n, icalcomponent *c)
 	start_t.second=0;
 	start_t.minute=0;
 	start_t.hour=0;
-	icaltime_copy(&end_t, icaltime_from_timet_with_zone(icaltime_as_timet(start_t)+n.length*60, 0, zone));
+	//TODO LATER This is not dynamic, we can only create events with a "pref" length
+	icaltime_copy(&end_t, icaltime_from_timet_with_zone(icaltime_as_timet(start_t)+n.session_len_pref*60, 0, zone));
 	time_t latest = icaltime_as_timet(n.latest);
 	int alloc_base = (latest-icaltime_as_timet(end_t))/600;
 	int realloc_counter = 0;
@@ -194,49 +196,64 @@ event_new(needs n, icalcomponent *c)
 	//Then, based on that, we search for the next best time, that also is compatible with the first time.
 	//This is repeated until we meet the time requirements.
 	if(possible_start_t_len == 0)
-		return false;
+		return NULL;
 	uint events_sum_len = 0;
 	int best_tm_i[possible_start_t_len];
-	for(int i=0; events_sum_len < latest; i++){
-		best_tm_i[i] = 0;
+	int i;
+	for(i=0; events_sum_len < n.length*60; i++){
+		best_tm_i[i] = -1;
 		for(int j=0; j < possible_start_t_len; j++){
-			for(int k=0; k < i; i++){
+			//We want to skip one instance of the for loop
+			//if we find an overlap or have the same index as an event beforehand.
+			//This is checked in the for loop with k
+			for(int k=0; k < i; k++){
 				if(timespans_ovlp(icaltime_as_timet(possible_start_t[best_tm_i[k]]),
 								  icaltime_as_timet(possible_end_t[best_tm_i[k]]),
 								  icaltime_as_timet(possible_start_t[j]),
-								  icaltime_as_timet(possible_end_t[j])))
-					continue;
+								  icaltime_as_timet(possible_end_t[j]))){
+					goto end_j_for;
+				}
+				if(j == best_tm_i[k]){
+					goto end_j_for;
+		 		}
 			}
-			if(pref[j] < pref[best_tm_i[i]])
-				best_tm_i[i] = i;
+			// init best_tm_i[i] with the first valid time
+			if(best_tm_i[i] == -1)
+				best_tm_i[i] = j;
+			else if(pref[j] < pref[best_tm_i[i]])
+				best_tm_i[i] = j;
+			end_j_for:
 		}
 		//Checks if anything as not overlapping. If everything overlapped, then we exit
 		if(i > 0){
 			if(best_tm_i[i] == best_tm_i[i-1]){
-				return false;
+				return NULL;
 			}
 		}
 		events_sum_len += icaltime_as_timet(possible_end_t[best_tm_i[i]]) -
 		                   icaltime_as_timet(possible_start_t[best_tm_i[i]]);
 	}
-	//TODO STARTHERE create a loop to create apropriate icalproperties
 	//If events_sum_len > latest müssen wir gucken wie wir am besten kürzen.
 	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
 	//Sonst irgendwie versuchen zwischen allen zu balancen.
 	icalproperty *prop;
-	prop = icalproperty_new_dtstart(possible_start_t[best_i]);
-	icalcomponent_add_property(c, prop);
-	icalproperty_free(prop);
-	prop = icalproperty_new_dtend(possible_end_t[best_i]);
-	icalcomponent_add_property(c, prop);
-	icalproperty_free(prop);
+	*c_len = i;
+	icalcomponent **c = malloc(sizeof(icalproperty *)*(*c_len));
+	for(int j=0; j < *c_len; j++){
+		c[j] = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
+		prop = icalproperty_new_dtstart(possible_start_t[best_tm_i[j]]);
+		icalcomponent_add_property(c[j], prop);
+		icalproperty_free(prop);
+		prop = icalproperty_new_dtend(possible_end_t[best_tm_i[j]]);
+		icalcomponent_add_property(c[j], prop);
+		icalproperty_free(prop);
+	}
 	free(possible_start_t);
 	free(possible_end_t);
 	free(pref);
-	return true;
+	return c;
 }
 
-//TODO STARTHERE 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
 timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t)
@@ -307,7 +324,7 @@ timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t)
 	// Check:
 	// - time requirements are met
 	time_t len = icaltime_as_timet(end_t) - icaltime_as_timet(start_t);
-	if(len < n.length*60 || len < n.session_len_min*60 || len > n.session_len_max*60)
+	if(len < n.session_len_min*60 || len > n.session_len_max*60)
 		return false;
 	return true;
 }
@@ -472,14 +489,10 @@ main(void)
 
 	load_events_from_disk("test.ics");
 
-	icalcomponent *event;
-	//icalproperty *prop;
-	//icalparameter *param;
-	//struct icaltimetype atime;
 	icaltime_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 300, 0, 300, 300, 200, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 900, 0, 300, 300, 300, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
@@ -494,7 +507,7 @@ main(void)
 			n.disallowed[0].mday[i] = true;
 		n.disallowed[0].minute[i] = false;
 	}
-	n.disallowed[0].wday[1] = true;
+	n.disallowed[0].wday[0] = true;
 	n.disallowed[0].min_all_f = is_array_false(n.disallowed[0].minute, 60);
 	n.disallowed[0].hour_all_f = is_array_false(n.disallowed[0].hour, 24);
 	n.disallowed[0].wday_all_f = is_array_false(n.disallowed[0].wday, 7);
@@ -527,15 +540,20 @@ main(void)
 	n.preferred[0].month_all_f = is_array_false(n.preferred[0].month, 12);
 	n.preferred[0].mday_all_f = is_array_false(n.preferred[0].mday, 31);
 
-	event = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
-	bool success = event_new(n, event);
-	if(!success)
+	int event_len;
+	icalcomponent **event = event_new(n, &event_len);
+	if(event == NULL){
 		printf("Couldnt find a time for you. Sorry!\n");
+		exit(-1);
+	}
 
-	printf("DTSTART: %s", icaltime_as_ical_string(icalproperty_get_dtstart(icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY))));
-	printf("DTEND  : %s\n", icaltime_as_ical_string(icalproperty_get_dtend(icalcomponent_get_next_property(event, ICAL_DTEND_PROPERTY))));
+	for(int i=0; i < event_len; i++){
+		printf("Event Nr. %d:\n", i);
+		printf("DTSTART: %s", icaltime_as_ical_string(icalproperty_get_dtstart(icalcomponent_get_first_property(event[i], ICAL_DTSTART_PROPERTY))));
+		printf("DTEND  : %s\n", icaltime_as_ical_string(icalproperty_get_dtend(icalcomponent_get_next_property(event[i], ICAL_DTEND_PROPERTY))));
+		icalcomponent_free(event[i]);
+	}
 
-	icalcomponent_free(event);
 
 	free(n.disallowed);
 	free(n.preferred);
