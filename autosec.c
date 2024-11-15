@@ -401,8 +401,30 @@ timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2)
 bool
 time_is_in_calendar(icaltimetype t)
 {
-	//TODO to implement this, we need to implement the calendar logic first
+	time_t t_start = icaltime_as_timet(t);
+	int ind = search_nearest_event(events_count/2, events_count/2+1, t_start);
 	return false;
+}
+
+//TODO LATER rewrite this at some point
+int
+search_nearest_event(int start_index, int index_change, time_t t_start)
+{
+	//Best search algo i've every written \s
+	icalproperty *c = icalcomponent_get_first_property(events[start_index], ICAL_DTSTART_PROPERTY);
+	icaltimetype t = icalproperty_get_dtstart(c);
+	time_t event_start = icaltime_as_timet(t);
+	
+	if(event_start > t_start){
+		if(index_change == 1)
+			return start_index-1;
+		return search_nearest_event(start_index-index_change/2, index_change/2, t_start);
+	}
+	if(event_start < t_start){
+		if(index_change == 1)
+			return start_index;
+		return search_nearest_event(start_index+index_change/2, index_change/2, t_start);
+	}
 }
 
 //Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
