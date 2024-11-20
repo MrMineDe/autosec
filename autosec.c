@@ -411,9 +411,15 @@ int
 search_nearest_event(int start_index, int index_change, time_t t_start)
 {
 	//Best search algo i've every written \s
+	
+	//In the recursion we dont check, if start_index is out of bounce. We do it here
+	if(start_index > events_count-1 || start_index < 0)
+		return start_index - index_change;
+
 	icalproperty *c = icalcomponent_get_first_property(events[start_index], ICAL_DTSTART_PROPERTY);
 	icaltimetype t = icalproperty_get_dtstart(c);
 	time_t event_start = icaltime_as_timet(t);
+
 	
 	if(event_start > t_start){
 		if(index_change == 1)
@@ -425,6 +431,7 @@ search_nearest_event(int start_index, int index_change, time_t t_start)
 			return start_index;
 		return search_nearest_event(start_index+index_change/2, index_change/2, t_start);
 	}
+	return start_index;
 }
 
 //Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
@@ -446,6 +453,11 @@ revents_compare_helper(const void *c1, const void *c2)
 }
 
 bool
+write_events_to_disk(char *path){
+
+}
+
+bool
 load_events_from_disk(char *path)
 {
 	FILE* f = fopen(path, "r");
@@ -453,11 +465,12 @@ load_events_from_disk(char *path)
 		return false;
 	icalparser *p = icalparser_new();
 	icalparser_set_gen_data(p, f);
-	icalcomponent *component = icalparser_parse(p, *custom_fgets);
+	icalcomponent *c = icalparser_parse(p, *custom_fgets);
 	icalparser_free(p);
-	if(component == 0)
+	fclose(f);
+	if(c == 0)
 		return false;
-	int new_events_count = icalcomponent_count_components(component, ICAL_VEVENT_COMPONENT);
+	int new_events_count = icalcomponent_count_components(c, ICAL_VEVENT_COMPONENT);
 	//We want to avoid reallocs, so we add enough space for all of the new events in both events and revents if needed
 	if(events_count+new_events_count >= events_max){
 		events = realloc(events, sizeof(icalcomponent*)*(events_max+new_events_count+10));
@@ -468,17 +481,13 @@ load_events_from_disk(char *path)
 		revents_max = revents_max + new_events_count + 10;
 	}
 	//Now fill the events read from the file(in component) into events and revents, checking for recurring(rrule) tag each time
-	icalcomponent *vevent = icalcomponent_get_first_component(component, ICAL_VEVENT_COMPONENT);
-	if(icalcomponent_get_first_property(vevent, ICAL_RRULE_PROPERTY) == NULL)
-		events[events_count++] = vevent;
-	else
-		revents[revents_count++] = vevent;
-	for(int i=1; i < new_events_count; i++){
-		vevent = icalcomponent_get_next_component(component, ICAL_VEVENT_COMPONENT);
-		if(icalcomponent_get_first_property(vevent, ICAL_RRULE_PROPERTY) == NULL)
-			events[events_count++] = vevent;
+	for(icalcomponent *event = icalcomponent_get_first_component(c, ICAL_VEVENT_COMPONENT);
+	    event != NULL;
+	    event=icalcomponent_get_next_component(c, ICAL_VEVENT_COMPONENT)){
+		if(icalcomponent_get_first_property(event, ICAL_RRULE_PROPERTY) == NULL)
+			events[events_count++] = icalcomponent_new_clone(event);
 		else
-			revents[revents_count++] = vevent;
+			revents[revents_count++] = icalcomponent_new_clone(event);
 	}
 
 	qsort(events, events_count, sizeof(icaltimetype*), events_compare_helper);
@@ -492,8 +501,7 @@ load_events_from_disk(char *path)
 	for(int i=0; i < revents_count; i++){
 		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(revents[i]));
 	}
-	icalcomponent_free(component);
-	//fclose(f);
+	icalcomponent_free(c);
 	return true;
 }
 
@@ -514,7 +522,7 @@ main(void)
 	icaltime_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 900, 0, 300, 300, 300, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 900, 0, 300, 300, 300, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24*3, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
@@ -529,7 +537,7 @@ main(void)
 			n.disallowed[0].mday[i] = true;
 		n.disallowed[0].minute[i] = false;
 	}
-	n.disallowed[0].wday[0] = true;
+	n.disallowed[0].wday[2] = true;
 	n.disallowed[0].min_all_f = is_array_false(n.disallowed[0].minute, 60);
 	n.disallowed[0].hour_all_f = is_array_false(n.disallowed[0].hour, 24);
 	n.disallowed[0].wday_all_f = is_array_false(n.disallowed[0].wday, 7);
@@ -579,8 +587,6 @@ main(void)
 
 	free(n.disallowed);
 	free(n.preferred);
-	//for(int i=0; i < events_size; i++)
-	//	free(events[i]);
 	free(events);
 	/*
 	prop = icalproperty_new_dtstamp(atime);
