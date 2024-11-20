@@ -434,7 +434,7 @@ search_nearest_event(int start_index, int index_change, time_t t_start)
 	return start_index;
 }
 
-//Helper, that compares the date of 2 components. Needed for qsort(), in calendar_load_from_disk() and potentially other occurrences
+//Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
 int
 events_compare_helper(const void *c1, const void *c2)
 {
@@ -443,7 +443,7 @@ events_compare_helper(const void *c1, const void *c2)
 	return icaltime_compare(t1, t2);
 }
 
-//Helper, that compares the date of 2 components. Needed for qsort(), in calendar_load_from_disk() and potentially other occurrences
+//Helper, that compares the date of 2 components. Needed for qsort(), in load_events_from_disk() and potentially other occurrences
 int
 revents_compare_helper(const void *c1, const void *c2)
 {
@@ -453,7 +453,7 @@ revents_compare_helper(const void *c1, const void *c2)
 }
 
 bool
-calendar_write_to_disk(char *path){
+write_events_to_disk(char *path){
 	icalcomponent *rootc = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
 
 	//Add a few calendar properties ig?
@@ -462,42 +462,23 @@ calendar_write_to_disk(char *path){
 
 	//Add all events and revents
 	for(int i=0; i < events_count; i++)
-		icalcomponent_add_component(rootc, icalcomponent_new_clone(events[i]));
+		icalcomponent_add_component(rootc, icalcomponent_clone(events[i]));
 	for(int i=0; i < revents_count; i++)
-		icalcomponent_add_component(rootc, icalcomponent_new_clone(revents[i]));
-
+		icalcomponent_add_component(rootc, icalcomponent_clone(revents[i]));
 	char *ical_string = icalcomponent_as_ical_string(rootc);
 
-	FILE *f = fopen(path, "w");
-	if(!f){
-		perror("Wanted to write events to disk. Failed to open file");
-		icalcomponent_free(rootc);
-		return false;
-	}
-
-	fprintf(f, "%s", ical_string);
-	fclose(f);
-
-	icalcomponent_free(rootc);
-	return true;
-}
-
 bool
-calendar_load_from_disk(char *path)
+load_events_from_disk(char *path)
 {
 	FILE* f = fopen(path, "r");
-	if(!f)
+	if(f == NULL)
 		return false;
 	icalparser *p = icalparser_new();
-	if(!p){
-		fclose(f);
-		return false;
-	}
 	icalparser_set_gen_data(p, f);
 	icalcomponent *rootc = icalparser_parse(p, *custom_fgets);
 	icalparser_free(p);
 	fclose(f);
-	if(!rootc)
+	if(rootc == 0)
 		return false;
 	int new_events_count = icalcomponent_count_components(rootc, ICAL_VEVENT_COMPONENT);
 	//We want to avoid reallocs, so we add enough space for all of the new events in both events and revents if needed
@@ -514,9 +495,9 @@ calendar_load_from_disk(char *path)
 	    event != NULL;
 	    event=icalcomponent_get_next_component(rootc, ICAL_VEVENT_COMPONENT)){
 		if(icalcomponent_get_first_property(event, ICAL_RRULE_PROPERTY) == NULL)
-			events[events_count++] = icalcomponent_new_clone(event);
+			events[events_count++] = icalcomponent_clone(event);
 		else
-			revents[revents_count++] = icalcomponent_new_clone(event);
+			revents[revents_count++] = icalcomponent_clone(event);
 	}
 
 	qsort(events, events_count, sizeof(icaltimetype*), events_compare_helper);
@@ -546,7 +527,7 @@ main(void)
 	//first set the timezone
 	zone = icaltimezone_get_builtin_timezone_from_offset(1, "Berlin");
 
-	calendar_load_from_disk("test.ics");
+	load_events_from_disk("test.ics");
 
 	icaltime_t earliest;
 	time(&earliest);
@@ -605,8 +586,6 @@ main(void)
 		printf("Couldnt find a time for you. Sorry!\n");
 		exit(-1);
 	}
-
-	calendar_write_to_disk("output.ics");
 
 	for(int i=0; i < event_len; i++){
 		printf("Event Nr. %d:\n", i);

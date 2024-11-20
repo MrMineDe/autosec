@@ -19,5 +19,6 @@ bool time_is_in_calendar(icaltimetype t);
 int search_nearest_event(int start_index, int index_change, time_t t_start);
 int events_compare_helper(const void *c1, const void *c2);
 int revents_compare_helper(const void *c1, const void *c2);
-bool load_events_from_disk(char* path);
+bool calendar_write_to_disk(char* path);
+bool calendar_load_from_disk(char* path);
 char* custom_fgets(char* s, size_t size, void *d);
