@@ -546,6 +546,7 @@ calendar_load_from_disk(char *path)
 	    event=icalcomponent_get_next_component(rootc, ICAL_VEVENT_COMPONENT)){
 		if(icalcomponent_get_first_property(event, ICAL_RRULE_PROPERTY) == NULL){
 			events[events_count++] = icalcomponent_new_clone(event);
+			//This(events_longest) is needed for some checks later on, so we just include it here, because its faster and bla bla
 			icalproperty *cstart = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
 			icalproperty *cend = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
 			time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
