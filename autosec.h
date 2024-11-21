@@ -15,7 +15,7 @@ bool timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t);
 bool time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t);
 bool time_is_in_datelist(datelist d, icaltimetype t);
 bool timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2);
-bool time_is_in_calendar(icaltimetype t);
+bool timespan_is_in_calendar(time_t start_t, time_t end_t);
 int search_nearest_event(int start_index, int index_change, time_t t_start);
 int events_compare_helper(const void *c1, const void *c2);
 int revents_compare_helper(const void *c1, const void *c2);

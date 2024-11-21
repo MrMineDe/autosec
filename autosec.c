@@ -7,7 +7,7 @@
 #include "autosec.h"
 
 icalcomponent **events, **revents; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
-uint events_count = 0, events_max = 0, revents_count = 0, revents_max = 0;
+uint events_count = 0, events_max = 0, events_longest = 0, revents_count = 0, revents_max = 0;
 
 // TODO Does this work? Is this smart? Does not deal with Sommer/Winterzeit
 icaltimezone *zone;
@@ -312,13 +312,14 @@ timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t)
 	// Checks:
 	// - disallowed
 	// - in calendar
+	if(timespan_is_in_calendar(icaltime_as_timet(start_t), icaltime_as_timet(end_t)))
+		return false;
 	icaltimetype time_temp;
 	for(icaltime_copy(&time_temp, start_t);
 		icaltime_compare(time_temp, end_t);
 		icaltime_copy(&time_temp, icaltime_from_timet_with_zone(icaltime_as_timet(time_temp)+60, 0, zone)))
 	{
-		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, time_temp) ||
-		   time_is_in_calendar(time_temp))
+		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, time_temp))
 			return false;
 	}
 	// Check:
@@ -399,10 +400,37 @@ timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2)
 
 // This checks if a time t is not applicable because at that time the calendar already contains an event
 bool
-time_is_in_calendar(icaltimetype t)
+timespan_is_in_calendar(time_t start_t, time_t end_t)
 {
-	time_t t_start = icaltime_as_timet(t);
-	int ind = search_nearest_event(events_count/2, events_count/2+1, t_start);
+	//search for the nearest event
+	int near_ind = search_nearest_event(events_count/2, events_count/2+1, start_t);
+	//Search in both directions
+	icalproperty *cstart = icalcomponent_get_first_property(events[near_ind], ICAL_DTSTART_PROPERTY);
+	icalproperty *cend = icalcomponent_get_first_property(events[near_ind], ICAL_DTSTART_PROPERTY);
+	time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
+	time_t near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+	//first search <- back
+	//We want to check until we are sure, that further back no event can reach start_t.
+	//This unfortunately means, that we have to store events_longest the whole time, just for this check...
+	for(int i=near_ind; i > 0 && start_t-near_endt < events_longest; i--){
+		//fill near_startt/near_endt for new element
+		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		cend = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
+		near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
+			return true;
+	}
+	for(int i=near_ind; i < events_count && near_startt < end_t; i++){
+		//fill near_startt/near_endt for new element
+		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		cend = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
+		near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
+			return true;
+	}
+
 	return false;
 }
 
@@ -422,8 +450,11 @@ search_nearest_event(int start_index, int index_change, time_t t_start)
 
 	
 	if(event_start > t_start){
-		if(index_change == 1)
+		if(index_change == 1){
+			if(start_index == 0)
+				return start_index;
 			return start_index-1;
+		}
 		return search_nearest_event(start_index-index_change/2, index_change/2, t_start);
 	}
 	if(event_start < t_start){
@@ -513,9 +544,15 @@ calendar_load_from_disk(char *path)
 	for(icalcomponent *event = icalcomponent_get_first_component(rootc, ICAL_VEVENT_COMPONENT);
 	    event != NULL;
 	    event=icalcomponent_get_next_component(rootc, ICAL_VEVENT_COMPONENT)){
-		if(icalcomponent_get_first_property(event, ICAL_RRULE_PROPERTY) == NULL)
+		if(icalcomponent_get_first_property(event, ICAL_RRULE_PROPERTY) == NULL){
 			events[events_count++] = icalcomponent_new_clone(event);
-		else
+			icalproperty *cstart = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
+			icalproperty *cend = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
+			time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
+			time_t near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+			if(events_longest < near_endt - near_startt)
+				events_longest = near_endt - near_startt;
+		} else
 			revents[revents_count++] = icalcomponent_new_clone(event);
 	}
 
@@ -546,7 +583,7 @@ main(void)
 	//first set the timezone
 	zone = icaltimezone_get_builtin_timezone_from_offset(1, "Berlin");
 
-	calendar_load_from_disk("test.ics");
+	calendar_load_from_disk("r.ics");
 
 	icaltime_t earliest;
 	time(&earliest);
