@@ -6,7 +6,7 @@ import random
 c = Calendar()
 
 # Starting date for events
-start_date = datetime(2024, 1, 1, 8, 0, 0)
+start_date = datetime(2024, 11, 10, 0, 0, 0)
 
 # Generate 1500 random events
 for i in range(1500):
@@ -15,7 +15,7 @@ for i in range(1500):
     
     # Random start time offset between 0 and 500 days from start_date
     random_days_offset = random.randint(0, 300)
-    random_start_time = start_date + timedelta(days=random_days_offset)
+    random_start_time = start_date + timedelta(days=random_days_offset, minutes=random.randint(0, 24*60))
     
     # Random event duration between 30 minutes and 14 hours
     duration_minutes = random.randint(30, 14 * 60)

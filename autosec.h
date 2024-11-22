@@ -19,6 +19,6 @@ bool timespan_is_in_calendar(time_t start_t, time_t end_t);
 int search_nearest_event(int start_index, int index_change, time_t t_start);
 int events_compare_helper(const void *c1, const void *c2);
 int revents_compare_helper(const void *c1, const void *c2);
-bool calendar_write_to_disk(char* path);
+bool calendar_write_to_disk(icalcomponent **cal, int cal_len, char* path);
 bool calendar_load_from_disk(char* path);
 char* custom_fgets(char* s, size_t size, void *d);

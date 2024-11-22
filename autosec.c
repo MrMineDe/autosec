@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "lib/libical/include/libical/ical.h"
 #include "lib/libical/include/libical/icalcomponent.h"
@@ -240,11 +241,25 @@ event_new(needs n, int *c_len)
 	*c_len = i;
 	icalcomponent **c = malloc(sizeof(icalproperty *)*(*c_len));
 	for(int j=0; j < *c_len; j++){
-		c[j] = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
+		c[j] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
 		prop = icalproperty_new_dtstart(possible_start_t[best_tm_i[j]]);
 		icalcomponent_add_property(c[j], prop);
 		icalproperty_free(prop);
 		prop = icalproperty_new_dtend(possible_end_t[best_tm_i[j]]);
+		icalcomponent_add_property(c[j], prop);
+		//16 for autosec.mminl.de and 15 for random number
+		//
+		char* uid = malloc(16+16);
+		strcpy(uid, "autosec.");
+    for(int i = 8; i < 8+15; i++) {
+        uid[i] = (rand() % 10) + '0';
+    }
+		strcat(uid, ".mminl.de");
+
+		prop = icalproperty_new_uid(uid);
+		icalcomponent_add_property(c[j], prop);
+		free(uid);
+		prop = icalproperty_new_summary("NEW TEST");
 		icalcomponent_add_property(c[j], prop);
 		icalproperty_free(prop);
 	}
@@ -406,27 +421,27 @@ timespan_is_in_calendar(time_t start_t, time_t end_t)
 	int near_ind = search_nearest_event(events_count/2, events_count/2+1, start_t);
 	//Search in both directions
 	icalproperty *cstart = icalcomponent_get_first_property(events[near_ind], ICAL_DTSTART_PROPERTY);
-	icalproperty *cend = icalcomponent_get_first_property(events[near_ind], ICAL_DTSTART_PROPERTY);
+	icalproperty *cend = icalcomponent_get_first_property(events[near_ind], ICAL_DTEND_PROPERTY);
 	time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-	time_t near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+	time_t near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
 	//first search <- back
 	//We want to check until we are sure, that further back no event can reach start_t.
 	//This unfortunately means, that we have to store events_longest the whole time, just for this check...
 	for(int i=near_ind; i > 0 && start_t-near_endt < events_longest; i--){
 		//fill near_startt/near_endt for new element
 		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
-		cend = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		cend = icalcomponent_get_first_property(events[i], ICAL_DTEND_PROPERTY);
 		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-		near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+		near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
 		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
 			return true;
 	}
 	for(int i=near_ind; i < events_count && near_startt < end_t; i++){
 		//fill near_startt/near_endt for new element
 		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
-		cend = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		cend = icalcomponent_get_first_property(events[i], ICAL_DTEND_PROPERTY);
 		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-		near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+		near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
 		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
 			return true;
 	}
@@ -484,7 +499,7 @@ revents_compare_helper(const void *c1, const void *c2)
 }
 
 bool
-calendar_write_to_disk(char *path){
+calendar_write_to_disk(icalcomponent **cal, int cal_len, char *path){
 	icalcomponent *rootc = icalcomponent_new(ICAL_VCALENDAR_COMPONENT);
 
 	//Add a few calendar properties ig?
@@ -492,10 +507,8 @@ calendar_write_to_disk(char *path){
 	icalcomponent_add_property(rootc, icalproperty_new_version("-//autosec//alpha"));
 
 	//Add all events and revents
-	for(int i=0; i < events_count; i++)
-		icalcomponent_add_component(rootc, icalcomponent_new_clone(events[i]));
-	for(int i=0; i < revents_count; i++)
-		icalcomponent_add_component(rootc, icalcomponent_new_clone(revents[i]));
+	for(int i=0; i < cal_len; i++)
+		icalcomponent_add_component(rootc, icalcomponent_new_clone(cal[i]));
 
 	char *ical_string = icalcomponent_as_ical_string(rootc);
 
@@ -548,7 +561,7 @@ calendar_load_from_disk(char *path)
 			events[events_count++] = icalcomponent_new_clone(event);
 			//This(events_longest) is needed for some checks later on, so we just include it here, because its faster and bla bla
 			icalproperty *cstart = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
-			icalproperty *cend = icalcomponent_get_first_property(event, ICAL_DTSTART_PROPERTY);
+			icalproperty *cend = icalcomponent_get_first_property(event, ICAL_DTEND_PROPERTY);
 			time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
 			time_t near_endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
 			if(events_longest < near_endt - near_startt)
@@ -581,10 +594,12 @@ custom_fgets(char *s, size_t size, void *d)
 int
 main(void)
 {
+
+	srand(time(NULL));
 	//first set the timezone
 	zone = icaltimezone_get_builtin_timezone_from_offset(1, "Berlin");
 
-	calendar_load_from_disk("r.ics");
+	calendar_load_from_disk("input.ics");
 
 	icaltime_t earliest;
 	time(&earliest);
@@ -644,7 +659,9 @@ main(void)
 		exit(-1);
 	}
 
-	calendar_write_to_disk("output.ics");
+	calendar_write_to_disk(events, events_count, "events_o.ics");
+	calendar_write_to_disk(revents, revents_count, "revents_o.ics");
+	calendar_write_to_disk(event, event_len, "new_o.ics");
 
 	for(int i=0; i < event_len; i++){
 		printf("Event Nr. %d:\n", i);
