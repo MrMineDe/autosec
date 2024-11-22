@@ -39,8 +39,8 @@ needs{
 	uint session_len_min;
 	uint session_len_max;
 	uint session_len_pref;
-	icaltimetype earliest; //Frühestens anfangen mit sessions. This can be a date, but can also specify a time
-	icaltimetype latest; //The point, where everything should be done. This can be a date, but can also specify a time
+	time_t earliest; //Frühestens anfangen mit sessions.
+	time_t latest; //The point, where everything should be done. This can be a date, but can also specify a time
 	//alle im datelist definierten Elemente, sind für Termine tabu.
 	//So kann man z.B. auch eine früheste/späteste Zeit (z.B. 8-15h täglich verboten) einführen.
 	//Wir müssen dies allerdings als Array definieren, um z.B. verschiedene tägliche Zeitverbote zu ermöglichen
@@ -62,6 +62,9 @@ needs{
 	uint pref_per_month;
 	uint pref_per_year;
 	// TOOD This is advanded stuff, not for the beginning
+	//uint min_dist;
+	//uint max_dist;
+	//uint pref_dist;
 	//icalcomponent execute_after; //the needs tasks should be executed before execute_after
 	//icalcomponent execute_before; //the needs tasks should be executed after execute_before
 };
@@ -86,7 +89,7 @@ init_datelist(datelist *d)
 
 void
 init_needs(needs *n, uint length, uint priority, uint session_len_min, uint session_len_max,
-					 uint session_len_pref, icaltimetype earliest, icaltimetype latest,
+					 uint session_len_pref, time_t earliest, time_t latest,
 					 uint max_per_day, uint max_per_week, uint max_per_month, uint max_per_year,
 					 uint min_per_day, uint min_per_week, uint min_per_month, uint min_per_year,
 					 uint pref_per_day, uint pref_per_week, uint pref_per_month, uint pref_per_year)
@@ -147,38 +150,33 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 icalcomponent **
 event_new(needs n, int *c_len)
 {
-	icaltimetype *possible_start_t, *possible_end_t;
+	time_t *possible_start_t, *possible_end_t;
 	int *pref;
 	//possible_start_t_len/max is also the len/max of end_t and pref
 	uint possible_start_t_len=0;
 	uint possible_start_t_max=0;
-	icaltimetype start_t, end_t;
-	icaltime_copy(&start_t, n.earliest);
-	start_t.is_date=0;
-	start_t.second=0;
-	start_t.minute=0;
-	start_t.hour=0;
+	time_t start_t, end_t;
+	start_t = n.earliest;
 	//TODO LATER This is not dynamic, we can only create events with a "pref" length
-	icaltime_copy(&end_t, icaltime_from_timet_with_zone(icaltime_as_timet(start_t)+n.session_len_pref*60, 0, zone));
-	time_t latest = icaltime_as_timet(n.latest);
-	int alloc_base = (latest-icaltime_as_timet(end_t))/600;
+	end_t = start_t+n.session_len_pref*60;
+	int alloc_base = (n.latest-end_t)/600;
 	int realloc_counter = 0;
-	while(icaltime_compare(end_t, n.latest) == -1){
+	while(end_t < n.latest){
 		if(timespan_is_ok(n, start_t, end_t)){
 			// If possible_start_t etc. is not malloced enough, we needs to alloc more
 			if(possible_start_t_len==possible_start_t_max){
 				if(possible_start_t_max==0){
-					possible_start_t = malloc(sizeof(icaltimetype)*alloc_base);
-					possible_end_t = malloc(sizeof(icaltimetype)*alloc_base);
+					possible_start_t = malloc(sizeof(time_t)*alloc_base);
+					possible_end_t = malloc(sizeof(time_t)*alloc_base);
 					pref = malloc(sizeof(int)*alloc_base);
 					possible_start_t_max=alloc_base;
 				} else {
 					realloc_counter++;
-					possible_start_t = realloc(possible_start_t, sizeof(icaltimetype)*(alloc_base*realloc_counter+possible_start_t_max));
-					possible_end_t = realloc(possible_end_t, sizeof(icaltimetype)*(alloc_base*realloc_counter+possible_start_t_max));
+					possible_start_t = realloc(possible_start_t, sizeof(time_t)*(alloc_base*realloc_counter+possible_start_t_max));
+					possible_end_t = realloc(possible_end_t, sizeof(time_t)*(alloc_base*realloc_counter+possible_start_t_max));
 					pref = realloc(pref, sizeof(int)*(alloc_base*realloc_counter+possible_start_t_max));
 					possible_start_t_max+=alloc_base;
-					printf("Realloced to: %d, Time to Go: %ld\n", possible_start_t_max, icaltime_as_timet(n.latest)-icaltime_as_timet(end_t));
+					printf("Realloced to: %d, Time to Go: %ld\n", possible_start_t_max, n.latest-end_t);
 				}
 			}
 			//We want to store every possible time for the event to later get the most preferred
@@ -187,8 +185,8 @@ event_new(needs n, int *c_len)
 			possible_end_t[possible_start_t_len] = end_t;
 			possible_start_t_len++;
 		}
-		icaltime_copy(&start_t, icaltime_from_timet_with_zone(icaltime_as_timet(start_t)+60, 0, zone));
-		icaltime_copy(&end_t, icaltime_from_timet_with_zone(icaltime_as_timet(end_t)+60, 0, zone));
+		start_t += 60;
+		end_t += 60;
 	}
 	//TODO LATER This is not only not efficient, but also does not deliver good quality.
 	//There may often be times where better overall times were available, but we were not able to find them.
@@ -208,10 +206,10 @@ event_new(needs n, int *c_len)
 			//if we find an overlap or have the same index as an event beforehand.
 			//This is checked in the for loop with k
 			for(int k=0; k < i; k++){
-				if(timespans_ovlp(icaltime_as_timet(possible_start_t[best_tm_i[k]]),
-								  icaltime_as_timet(possible_end_t[best_tm_i[k]]),
-								  icaltime_as_timet(possible_start_t[j]),
-								  icaltime_as_timet(possible_end_t[j]))){
+				if(timespans_ovlp(possible_start_t[best_tm_i[k]],
+								  possible_end_t[best_tm_i[k]],
+								  possible_start_t[j],
+								  possible_end_t[j])){
 					goto end_j_for;
 				}
 				if(j == best_tm_i[k]){
@@ -231,8 +229,7 @@ event_new(needs n, int *c_len)
 				return NULL;
 			}
 		}
-		events_sum_len += icaltime_as_timet(possible_end_t[best_tm_i[i]]) -
-		                   icaltime_as_timet(possible_start_t[best_tm_i[i]]);
+		events_sum_len += possible_end_t[best_tm_i[i]] - possible_start_t[best_tm_i[i]];
 	}
 	//If events_sum_len > latest müssen wir gucken wie wir am besten kürzen.
 	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
@@ -242,10 +239,10 @@ event_new(needs n, int *c_len)
 	icalcomponent **c = malloc(sizeof(icalproperty *)*(*c_len));
 	for(int j=0; j < *c_len; j++){
 		c[j] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
-		prop = icalproperty_new_dtstart(possible_start_t[best_tm_i[j]]);
+		prop = icalproperty_new_dtstart(icaltime_from_timet_with_zone(possible_start_t[best_tm_i[j]], 0, zone));
 		icalcomponent_add_property(c[j], prop);
 		icalproperty_free(prop);
-		prop = icalproperty_new_dtend(possible_end_t[best_tm_i[j]]);
+		prop = icalproperty_new_dtend(icaltime_from_timet_with_zone(possible_end_t[best_tm_i[j]], 0, zone));
 		icalcomponent_add_property(c[j], prop);
 		//16 for autosec.mminl.de and 15 for random number
 		//
@@ -271,11 +268,9 @@ event_new(needs n, int *c_len)
 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
-timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t)
+timespan_pref(needs n, time_t start, time_t end)
 {
 	//Every option is evaluated beteen 0 and 1. Afterwards weighed and added
-	time_t start = icaltime_as_timet(start_t);
-	time_t end = icaltime_as_timet(end_t);
 	time_t session_len = end-start;
 	//session length
 	float length_val;
@@ -307,9 +302,8 @@ timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t)
 	if(start%1800 == 0 || start%1800 == 900)
 		position_val = 0;
 	//How far away from the start it is
-	time_t latest = icaltime_as_timet(n.latest);
 	float near_start_val;
-	near_start_val = (float)(latest-end)/(latest-session_len);
+	near_start_val = (float)(n.latest-end)/(n.latest-session_len);
 	near_start_val /= 100;
 	//TODO LATER time preferred after last event. Maybe custom for each event
 	//pref_per_X
@@ -322,24 +316,22 @@ timespan_pref(needs n, icaltimetype start_t, icaltimetype end_t)
 // - already existing calendar items
 // - minimal time requirements are met (length, time, etc.)
 bool
-timespan_is_ok(needs n, icaltimetype start_t, icaltimetype end_t)
+timespan_is_ok(needs n, time_t start, time_t end)
 {
 	// Checks:
 	// - disallowed
 	// - in calendar
-	if(timespan_is_in_calendar(icaltime_as_timet(start_t), icaltime_as_timet(end_t)))
+	if(timespan_is_in_calendar(start, end))
 		return false;
-	icaltimetype time_temp;
-	for(icaltime_copy(&time_temp, start_t);
-		icaltime_compare(time_temp, end_t);
-		icaltime_copy(&time_temp, icaltime_from_timet_with_zone(icaltime_as_timet(time_temp)+60, 0, zone)))
+	time_t time_temp;
+	for(time_temp = start; time_temp < end; time_temp += 60)
 	{
-		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, time_temp))
+		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, icaltime_from_timet_with_zone(time_temp, 0, zone)))
 			return false;
 	}
 	// Check:
 	// - time requirements are met
-	time_t len = icaltime_as_timet(end_t) - icaltime_as_timet(start_t);
+	time_t len = end - start;
 	if(len < n.session_len_min*60 || len > n.session_len_max*60)
 		return false;
 	return true;
@@ -601,10 +593,10 @@ main(void)
 
 	calendar_load_from_disk("input.ics");
 
-	icaltime_t earliest;
+	time_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 900, 0, 300, 300, 300, icaltime_from_timet_with_zone(earliest, 0, zone), icaltime_from_timet_with_zone(earliest+60*60*24*3, 0, zone), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 900, 0, 300, 300, 300, earliest, earliest+60*60*24*3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
