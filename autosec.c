@@ -22,7 +22,7 @@ datelist{
 	bool wday[7];
 	bool mday[31];
 	bool month[12];
-	int year[100]; //TODO CONSIDER you can define at max 100 different years here. Not perfect.
+	//int year[100]; //TODO CONSIDER you can define at max 100 different years here. Not perfect.
 	// all elements in min/hour etc. are false
 	bool min_all_f;
 	bool hour_all_f;
@@ -41,13 +41,6 @@ needs{
 	uint session_len_pref;
 	time_t earliest; //Frühestens anfangen mit sessions.
 	time_t latest; //The point, where everything should be done. This can be a date, but can also specify a time
-	//alle im datelist definierten Elemente, sind für Termine tabu.
-	//So kann man z.B. auch eine früheste/späteste Zeit (z.B. 8-15h täglich verboten) einführen.
-	//Wir müssen dies allerdings als Array definieren, um z.B. verschiedene tägliche Zeitverbote zu ermöglichen
-	datelist *disallowed; 
-	uint disallowed_len;
-	datelist *preferred;
-	uint preferred_len;
 	//defines the max and min minutes spend per day/week/month/year
 	uint max_per_day;
 	uint max_per_week;
@@ -61,6 +54,13 @@ needs{
 	uint pref_per_week;
 	uint pref_per_month;
 	uint pref_per_year;
+	//alle im datelist definierten Elemente, sind für Termine tabu.
+	//So kann man z.B. auch eine früheste/späteste Zeit (z.B. 8-15h täglich verboten) einführen.
+	//Wir müssen dies allerdings als Array definieren, um z.B. verschiedene tägliche Zeitverbote zu ermöglichen
+	uint disallowed_len;
+	datelist *disallowed; 
+	uint preferred_len;
+	datelist *preferred;
 	// TOOD This is advanded stuff, not for the beginning
 	//uint min_dist;
 	//uint max_dist;
@@ -73,7 +73,7 @@ void
 init_datelist(datelist *d)
 {
 	for(int i=0; i < 100; i++){
-		d->year[i] = 0;
+		//d->year[i] = 0;
 		if(i < 60)
 			d->minute[i] = false;
 		if(i < 24)
@@ -580,7 +580,96 @@ calendar_load_from_disk(char *path)
 char*
 custom_fgets(char *s, size_t size, void *d)
 {
-    return fgets(s, size, (FILE*)d);
+	return fgets(s, size, (FILE*)d);
+}
+
+bool
+needs_to_string(needs n, char* out, int out_len)
+{
+	// We first store all static information
+	int ret = snprintf(out, out_len, "%d;%d;%d;%d;%d;%ld;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;",
+	           n.length, n.priority, n.session_len_min, n.session_len_max, n.session_len_pref, n.earliest,
+	           n.latest, n.max_per_day, n.max_per_week, n.max_per_month,
+	           n.max_per_year, n.min_per_day, n.min_per_week, n.min_per_month, n.min_per_year,
+	           n.pref_per_day, n.pref_per_week, n.pref_per_month, n.pref_per_year);
+	if(ret-out_len > 0)
+		return false;
+
+	//Then we store the disallowed and preferred array (+ their size), which size can vary
+	char disallowed_len[20];
+	sprintf(disallowed_len, "%d;", n.disallowed_len);
+	if(strlen(disallowed_len) > out_len-strlen(out))
+		return false;
+	strcat(out, disallowed_len);
+
+	char disallowed[194];
+	for(int i=0; i < n.disallowed_len; i++){
+		datelist_to_string(n.disallowed[i], disallowed, 194);
+		if(strlen(disallowed)+1 > out_len-strlen(out))
+			return false;
+		strcat(out, disallowed);
+	}
+
+	char preferred_len[20];
+	sprintf(preferred_len, ";%d;", n.preferred_len);
+	if(strlen(preferred_len) > out_len-strlen(out))
+		return false;
+	strcat(out, disallowed_len);
+
+	char preferred[194];
+	for(int i=0; i < n.disallowed_len; i++){
+		datelist_to_string(n.preferred[i], preferred, 194);
+		if(strlen(preferred) > out_len-strlen(out))
+			return false;
+		strcat(out, preferred);
+	}
+	printf("%s", out);
+	return true;
+}
+
+bool
+datelist_to_string(datelist d, char* out, int out_len)
+{
+	char min[61], hour[25], wday[8], mday[32], month[13]; 
+	bool_arr_to_string(d.minute, 60, min);
+	bool_arr_to_string(d.hour, 24, hour);
+	bool_arr_to_string(d.wday, 7, wday);
+	bool_arr_to_string(d.mday, 31, mday);
+	bool_arr_to_string(d.month, 12, month);
+	int ret = snprintf(out, out_len, "%s,%s,%s,%s,%s;", min, hour, wday, mday, month);
+	if(ret-out_len > 0)
+		return false;
+	return true;
+}
+
+void
+bool_arr_to_string(bool *arr, int arr_len, char *out){
+	out[0] = '\0';
+	for(int i=0; i < arr_len; i++){
+		out[i] = arr[i] + '0';
+	}
+	out[arr_len] = '\0';
+}
+
+//@in string to convert and pointers to initialised datelists.
+//If needed this function will realloc the datelists, but write it to the given pointers.
+//This meens, the calling function still has the responsibility about that memory!
+needs
+string_to_needs(char *str, datelist **disallowed, datelist **preferred)
+{
+	
+}
+
+datelist
+string_to_datelist(char *str)
+{
+
+}
+
+void
+string_to_bool_arr(char *str, bool *arr)
+{
+
 }
 
 int
@@ -643,6 +732,11 @@ main(void)
 	n.preferred[0].wday_all_f = is_array_false(n.preferred[0].wday, 7);
 	n.preferred[0].month_all_f = is_array_false(n.preferred[0].month, 12);
 	n.preferred[0].mday_all_f = is_array_false(n.preferred[0].mday, 31);
+
+	char out[9000];
+	if(!needs_to_string(n, out, 9000))
+		printf("hurensohn");
+	return 0;
 
 	int event_len;
 	icalcomponent **event = event_new(n, &event_len);
