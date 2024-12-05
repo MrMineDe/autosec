@@ -694,7 +694,7 @@ string_to_needs(char *str)
 	if(ret != 23){
 		printf("\nret:%d\n", ret);
 		perror("ERROR converting string to need! Exiting\n");
-		exit(2);
+		exit(1);
 	}
 
 	n.disallowed = malloc(sizeof(datelist)*n.disallowed_len);
@@ -723,7 +723,7 @@ string_to_datelist(char *str)
 	int ret = sscanf(str, "%[^,],%[^,],%[^,],%[^,],%[^,];", min_str, hour_str, wday_str, mday_str, month_str);
 	if(ret != 5){
 		perror("Error converting string to datelist! Exiting...\n");
-		exit(2);
+		exit(1);
 	}
 	datelist d;
 
@@ -813,26 +813,31 @@ main(void)
 	char out[9000];
 	if(!needs_to_string(n, out, 9000)){
 		printf("ferhele1");
-		return 0;
+		return 1;
 	}
-
-	needs need2 = string_to_needs(out);
-
-	if(!needs_to_string(need2, out, 9000)){
-		printf("ferhlele 3.0");
-		return 0;
-	}
-
-	free(need2.disallowed);
-	free(need2.preferred);
-	return 0;
 
 	int event_len;
 	icalcomponent **event = event_new(n, &event_len);
 	if(event == NULL){
 		printf("Couldnt find a time for you. Sorry!\n");
-		exit(-1);
+		exit(1);
 	}
+
+	
+	char *needs_name = "EXAMPLE_NAME";
+	for(int i=0; i < event_len; i++){
+		icalproperty *groupname = icalproperty_new(ICAL_CATEGORIES_PROPERTY);
+		icalproperty_set_categories(groupname, needs_name);
+    icalcomponent_add_property(event[i], groupname);
+    icalproperty_free(groupname);
+
+    icalproperty *xneeds = icalproperty_new_x("X-NEEDS");
+		icalproperty_set_x_name(xneeds, "X-NEEDS");
+		icalproperty_set_value(xneeds, icalvalue_new_text(out));
+    icalcomponent_add_property(event[i], xneeds);
+		icalproperty_free(xneeds);
+	}
+	
 
 	calendar_write_to_disk(events, events_count, "events_o.ics");
 	calendar_write_to_disk(revents, revents_count, "revents_o.ics");
