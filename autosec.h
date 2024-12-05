@@ -25,6 +25,6 @@ char* custom_fgets(char* s, size_t size, void *d);
 bool needs_to_string(needs n, char* out, int out_len);
 bool datelist_to_string(datelist d, char* out, int out_len);
 void bool_arr_to_string(bool *arr, int arr_len, char*out);
-needs string_to_needs(char *str, datelist *disallowed, datelist *preferred);
+needs string_to_needs(char *str);
 datelist string_to_datelist(char *str);
 void string_to_bool_arr(char *str, bool *arr);

@@ -7,6 +7,12 @@
 
 #include "autosec.h"
 
+//This is ugly, but waaay easier then other solutions I find right now
+#define DISALLOWED_DATELIST_AMOUNT_MAX 10000
+#define PREFERRED_DATELIST_AMOUNT_MAX 10000
+
+#define DATELIST_STRING_LEN 194
+
 icalcomponent **events, **revents; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
 uint events_count = 0, events_max = 0, events_longest = 0, revents_count = 0, revents_max = 0;
 
@@ -68,6 +74,24 @@ needs{
 	//icalcomponent execute_after; //the needs tasks should be executed before execute_after
 	//icalcomponent execute_before; //the needs tasks should be executed after execute_before
 };
+
+//Cut after i characters
+void
+splitString(char *str, int i, char *left, char *right)
+{
+  strncpy(left, str, i);
+  left[i] = '\0'; // Null-terminate the left part
+  strcpy(right, str + i);
+}
+
+void
+copy_bool_arr(bool *dest, bool *orig, int len)
+{
+	for(int i=0; i < len; i++){
+		dest[i] = orig[i];
+	}
+	return;
+}
 
 void
 init_datelist(datelist *d)
@@ -602,9 +626,9 @@ needs_to_string(needs n, char* out, int out_len)
 		return false;
 	strcat(out, disallowed_len);
 
-	char disallowed[194];
+	char disallowed[DATELIST_STRING_LEN];
 	for(int i=0; i < n.disallowed_len; i++){
-		datelist_to_string(n.disallowed[i], disallowed, 194);
+		datelist_to_string(n.disallowed[i], disallowed, DATELIST_STRING_LEN);
 		if(strlen(disallowed)+1 > out_len-strlen(out))
 			return false;
 		strcat(out, disallowed);
@@ -616,14 +640,13 @@ needs_to_string(needs n, char* out, int out_len)
 		return false;
 	strcat(out, disallowed_len);
 
-	char preferred[194];
+	char preferred[DATELIST_STRING_LEN];
 	for(int i=0; i < n.disallowed_len; i++){
-		datelist_to_string(n.preferred[i], preferred, 194);
+		datelist_to_string(n.preferred[i], preferred, DATELIST_STRING_LEN);
 		if(strlen(preferred) > out_len-strlen(out))
 			return false;
 		strcat(out, preferred);
 	}
-	printf("%s", out);
 	return true;
 }
 
@@ -652,24 +675,78 @@ bool_arr_to_string(bool *arr, int arr_len, char *out){
 }
 
 //@in string to convert and pointers to initialised datelists.
-//If needed this function will realloc the datelists, but write it to the given pointers.
-//This meens, the calling function still has the responsibility about that memory!
+//This function will malloc the datelists, and attach it to the need
+//This meens, the calling function still has the responsibility for that memory, in form of the need!
 needs
-string_to_needs(char *str, datelist **disallowed, datelist **preferred)
+string_to_needs(char *str)
 {
-	
+	needs n;
+	char *disallowed_str = malloc(sizeof(char) * DATELIST_STRING_LEN * DISALLOWED_DATELIST_AMOUNT_MAX);
+	char *preferred_str = malloc(sizeof(datelist) * DATELIST_STRING_LEN * PREFERRED_DATELIST_AMOUNT_MAX);
+
+	int ret = sscanf(str, "%d;%d;%d;%d;%d;%ld;%ld;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%[^;];%d;%[^;];\n",
+	  &n.length, &n.priority, &n.session_len_min, &n.session_len_max, &n.session_len_pref, &n.earliest,
+	  &n.latest, &n.max_per_day, &n.max_per_week, &n.max_per_month,
+	  &n.max_per_year, &n.min_per_day, &n.min_per_week, &n.min_per_month, &n.min_per_year,
+	  &n.pref_per_day, &n.pref_per_week, &n.pref_per_month, &n.pref_per_year,
+	  &n.disallowed_len, disallowed_str, &n.preferred_len, preferred_str);
+	//Check if all 23 %XX arguments were matched successfully
+	if(ret != 23){
+		printf("\nret:%d\n", ret);
+		perror("ERROR converting string to need! Exiting\n");
+		exit(2);
+	}
+
+	n.disallowed = malloc(sizeof(datelist)*n.disallowed_len);
+	n.preferred = malloc(sizeof(datelist)*n.preferred_len);
+
+	//we need a temporary storage for the datelists we extract each for rotation
+	char d_temp[DATELIST_STRING_LEN+1];
+
+	for(int i=0; i < n.disallowed_len; i++){
+		splitString(disallowed_str, DATELIST_STRING_LEN, d_temp, disallowed_str);
+		n.disallowed[i] = string_to_datelist(d_temp);
+	}
+
+	for(int i=0; i < n.disallowed_len; i++){
+		splitString(preferred_str, DATELIST_STRING_LEN, d_temp, preferred_str);
+		n.preferred[i] = string_to_datelist(d_temp);
+	}
+
+	return n;
 }
 
 datelist
 string_to_datelist(char *str)
 {
+	char min_str[61], hour_str[25], wday_str[8], mday_str[32], month_str[13];
+	int ret = sscanf(str, "%[^,],%[^,],%[^,],%[^,],%[^,];", min_str, hour_str, wday_str, mday_str, month_str);
+	if(ret != 5){
+		perror("Error converting string to datelist! Exiting...\n");
+		exit(2);
+	}
+	datelist d;
 
+	string_to_bool_arr(min_str, d.minute);
+	string_to_bool_arr(hour_str, d.hour);
+	string_to_bool_arr(wday_str, d.wday);
+	string_to_bool_arr(mday_str, d.mday);
+	string_to_bool_arr(month_str, d.month);
+
+	return d;
 }
 
 void
 string_to_bool_arr(char *str, bool *arr)
 {
-
+	int len = strlen(str);
+	for(int i=0; i < len; i++){
+		if(str[i] == '1')
+			arr[i] = true;
+		else
+			arr[i] = false;
+	}
+	return;
 }
 
 int
@@ -734,8 +811,20 @@ main(void)
 	n.preferred[0].mday_all_f = is_array_false(n.preferred[0].mday, 31);
 
 	char out[9000];
-	if(!needs_to_string(n, out, 9000))
-		printf("hurensohn");
+	if(!needs_to_string(n, out, 9000)){
+		printf("ferhele1");
+		return 0;
+	}
+
+	needs need2 = string_to_needs(out);
+
+	if(!needs_to_string(need2, out, 9000)){
+		printf("ferhlele 3.0");
+		return 0;
+	}
+
+	free(need2.disallowed);
+	free(need2.preferred);
 	return 0;
 
 	int event_len;
