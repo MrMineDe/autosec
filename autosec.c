@@ -12,6 +12,7 @@
 #define PREFERRED_DATELIST_AMOUNT_MAX 10000
 
 #define DATELIST_STRING_LEN 194
+#define WANTED_MAX_PREF_AVG 0.2f
 
 icalcomponent **events, **revents; // A sorted(by time) array of all events, loaded into the program. It is dynamically reallocated, when adding new events to cache or removing from cache
 uint events_count = 0, events_max = 0, events_longest = 0, revents_count = 0, revents_max = 0;
@@ -84,14 +85,6 @@ splitString(char *str, int i, char *left, char *right)
   strcpy(right, str + i);
 }
 
-void
-copy_bool_arr(bool *dest, bool *orig, int len)
-{
-	for(int i=0; i < len; i++){
-		dest[i] = orig[i];
-	}
-	return;
-}
 
 void
 init_datelist(datelist *d)
@@ -109,6 +102,19 @@ init_datelist(datelist *d)
 		if(i < 12)
 			d->month[i] = false;
 	}
+}
+
+//@ret write the uid in the input and return nothing
+void
+create_uid(char* uid)
+{
+	//16 for autosec.mminl.de and 15 for random number
+	uid[0] = '\0';
+	strcpy(uid, "autosec.");
+  for(int i = 8; i < 8+15; i++) {
+      uid[i] = (rand() % 10) + '0';
+  }
+	strcat(uid, ".mminl.de");
 }
 
 void
@@ -172,123 +178,172 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 // We return NULL if we couldnt find any possible time TODO This needs to be refactored eventually.
 // the icalcomponent **c array of pointers is returned with a "library malloc", so it has to be freed, by the calling function!
 icalcomponent **
-event_new(needs n, int *c_len)
+event_new(needs n, int *best_indeces_len)
 {
-	time_t *possible_start_t, *possible_end_t;
-	int *pref;
-	//possible_start_t_len/max is also the len/max of end_t and pref
-	uint possible_start_t_len=0;
-	uint possible_start_t_max=0;
+	time_t *poss_starts, *poss_ends;
+	int *prefs;
+	int *best_indeces;
+	//poss_starts_len/max is also the len/max of end_t and pref
+	uint poss_starts_len=0;
+	uint poss_max_i=0;
 	time_t start_t, end_t;
 	start_t = n.earliest;
 	//TODO LATER This is not dynamic, we can only create events with a "pref" length
 	end_t = start_t+n.session_len_pref*60;
 	int alloc_base = (n.latest-end_t)/600;
 	int realloc_counter = 0;
+	// We start with 30 min search mode. See comment at the end of the while for more context.
+	int search_mode = 30;
 	while(end_t < n.latest){
 		if(timespan_is_ok(n, start_t, end_t)){
-			// If possible_start_t etc. is not malloced enough, we needs to alloc more
-			if(possible_start_t_len==possible_start_t_max){
-				if(possible_start_t_max==0){
-					possible_start_t = malloc(sizeof(time_t)*alloc_base);
-					possible_end_t = malloc(sizeof(time_t)*alloc_base);
-					pref = malloc(sizeof(int)*alloc_base);
-					possible_start_t_max=alloc_base;
+			// If poss_starts etc. is not malloced enough, we needs to alloc more
+			if(poss_starts_len==poss_max_i){
+				if(poss_max_i==0){
+					poss_starts = malloc(sizeof(time_t)*alloc_base);
+					poss_ends = malloc(sizeof(time_t)*alloc_base);
+					prefs = malloc(sizeof(int)*alloc_base);
+					poss_max_i=alloc_base;
 				} else {
 					realloc_counter++;
-					possible_start_t = realloc(possible_start_t, sizeof(time_t)*(alloc_base*realloc_counter+possible_start_t_max));
-					possible_end_t = realloc(possible_end_t, sizeof(time_t)*(alloc_base*realloc_counter+possible_start_t_max));
-					pref = realloc(pref, sizeof(int)*(alloc_base*realloc_counter+possible_start_t_max));
-					possible_start_t_max+=alloc_base;
-					printf("Realloced to: %d, Time to Go: %ld\n", possible_start_t_max, n.latest-end_t);
+					poss_starts = realloc(poss_starts, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
+					poss_ends = realloc(poss_ends, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
+					prefs = realloc(prefs, sizeof(int)*(alloc_base*realloc_counter+poss_max_i));
+					poss_max_i+=alloc_base;
+					printf("Realloced to: %d, Time to Go: %ld\n", poss_max_i, n.latest-end_t);
 				}
 			}
 			//We want to store every possible time for the event to later get the most preferred
-			pref[possible_start_t_len] = timespan_pref(n, start_t, end_t);
-			possible_start_t[possible_start_t_len] = start_t;
-			possible_end_t[possible_start_t_len] = end_t;
-			possible_start_t_len++;
+			prefs[poss_starts_len] = timespan_pref(n, start_t, end_t);
+			poss_starts[poss_starts_len] = start_t;
+			poss_ends[poss_starts_len] = end_t;
+			poss_starts_len++;
 		}
-		start_t += 60;
-		end_t += 60;
-	}
-	//TODO LATER This is not only not efficient, but also does not deliver good quality.
-	//There may often be times where better overall times were available, but we were not able to find them.
+		// We want to first search only every 30min, then every 15, then every 10, then every 5
+		// We hope, that most of the time we get enough "perfect" times in the first rounds
+		// That way we can make all of this between 30 to 10 times faster
+		start_t += search_mode * 60;
+		end_t += search_mode * 60;
+		if(end_t < n.latest){
+			//We dont need to continue, if we have enough
+			best_indeces = malloc(sizeof(int)*poss_max_i);
+			if(find_best_time(n, poss_starts, poss_ends, prefs, poss_max_i, best_indeces, best_indeces_len)){
+				//we found that a time is possible, but we only want to quit if the avg of pref is below our tolerance
+				int pref_avg = 0;
+				for(int i=0; i < *best_indeces_len; i++){
+					//TODO STARTHERE debug further
+					//for some reason prefs[14] is -89234 or whatever, so not initialised.
+					//But there are over 400 elements according to poss_max_i...
+					pref_avg += prefs[best_indeces[i]];
+				}
+				pref_avg /= *best_indeces_len;
+				if(pref_avg < WANTED_MAX_PREF_AVG)
+					break;
+			}
 
+			//Count down the search modes, when mode=1 is done quit
+			if(search_mode == 30)
+				search_mode = 15;
+			else if(search_mode == 15)
+				search_mode = 10;
+			else if(search_mode == 10)
+				search_mode = 5;
+			else if(search_mode == 5)
+				search_mode = 1;
+			else
+				break;
+
+			//reset the time, but skip the first date, as we did it already in the first round
+			start_t = n.earliest;
+			end_t = start_t+n.session_len_pref*60;
+			start_t += search_mode * 60;
+			end_t += search_mode * 60;
+		}
+	}
+
+	//Now we create the resulting events in c.
+	//We need to add start, end and uid for each event.
+	icalproperty *prop;
+	icalcomponent **c = malloc(sizeof(icalproperty *)*(*best_indeces_len));
+	for(int j=0; j < *best_indeces_len; j++){
+		c[j] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
+		prop = icalproperty_new_dtstart(icaltime_from_timet_with_zone(poss_starts[best_indeces[j]], 0, zone));
+		icalcomponent_add_property(c[j], prop);
+		icalproperty_free(prop);
+		prop = icalproperty_new_dtend(icaltime_from_timet_with_zone(poss_ends[best_indeces[j]], 0, zone));
+		icalcomponent_add_property(c[j], prop);
+		//Every event needs a custom UID that does not start with numbers
+		//16 for autosec.mminl.de and 15 for random number
+		char uid[32];
+		create_uid(uid);
+
+		prop = icalproperty_new_uid(uid);
+		icalcomponent_add_property(c[j], prop);
+	}
+	free(poss_starts);
+	free(poss_ends);
+	free(prefs);
+	return c;
+}
+
+//@ret false if there is no combination of times, that fit.
+//best_indeces is an array, which should be initialised with amount_possibles elements
+//best_indeces_len is a pointer to a int
+
+//TODO LATER This is not only not efficient, but also does not deliver good quality.
+//There may often be times where better overall times were available, but we were not able to find them.
+bool
+find_best_time(needs n, time_t *starts, time_t *ends, int *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len)
+{
 	//We want to first take the first best time.
 	//Then, based on that, we search for the next best time, that also is compatible with the first time.
 	//This is repeated until we meet the time requirements.
-	if(possible_start_t_len == 0)
+	if(amount_possibles == 0)
 		return NULL;
 	uint events_sum_len = 0;
-	int best_tm_i[possible_start_t_len];
 	int i;
 	for(i=0; events_sum_len < n.length*60; i++){
-		best_tm_i[i] = -1;
-		for(int j=0; j < possible_start_t_len; j++){
+		best_indeces[i] = -1;
+		for(int j=0; j < amount_possibles; j++){
 			//We want to skip one instance of the for loop
 			//if we find an overlap or have the same index as an event beforehand.
 			//This is checked in the for loop with k
 			for(int k=0; k < i; k++){
-				if(timespans_ovlp(possible_start_t[best_tm_i[k]],
-								  possible_end_t[best_tm_i[k]],
-								  possible_start_t[j],
-								  possible_end_t[j])){
+				if(timespans_ovlp(starts[best_indeces[k]],
+								  ends[best_indeces[k]],
+								  starts[j],
+								  ends[j])){
 					goto end_j_for;
 				}
-				if(j == best_tm_i[k]){
+				if(j == best_indeces[k]){
 					goto end_j_for;
 		 		}
 			}
-			// init best_tm_i[i] with the first valid time
-			if(best_tm_i[i] == -1)
-				best_tm_i[i] = j;
-			else if(pref[j] < pref[best_tm_i[i]])
-				best_tm_i[i] = j;
+			// init best_indeces[i] with the first valid time
+			if(best_indeces[i] == -1)
+				best_indeces[i] = j;
+			else if(prefs[j] < prefs[best_indeces[i]])
+				best_indeces[i] = j;
 			end_j_for:
 		}
+		//TODO Understand this and write a better comment
 		//Checks if anything as not overlapping. If everything overlapped, then we exit
 		if(i > 0){
-			if(best_tm_i[i] == best_tm_i[i-1]){
-				return NULL;
+			if(best_indeces[i] == best_indeces[i-1]){
+				return false;
 			}
 		}
-		events_sum_len += possible_end_t[best_tm_i[i]] - possible_start_t[best_tm_i[i]];
+		events_sum_len += ends[best_indeces[i]] - starts[best_indeces[i]];
 	}
-	//If events_sum_len > latest müssen wir gucken wie wir am besten kürzen.
+	*best_indeces_len = i;
+	//If events_sum_len > n.length*60 müssen wir gucken wie wir am besten kürzen.
 	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
 	//Sonst irgendwie versuchen zwischen allen zu balancen.
-	icalproperty *prop;
-	*c_len = i;
-	icalcomponent **c = malloc(sizeof(icalproperty *)*(*c_len));
-	for(int j=0; j < *c_len; j++){
-		c[j] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
-		prop = icalproperty_new_dtstart(icaltime_from_timet_with_zone(possible_start_t[best_tm_i[j]], 0, zone));
-		icalcomponent_add_property(c[j], prop);
-		icalproperty_free(prop);
-		prop = icalproperty_new_dtend(icaltime_from_timet_with_zone(possible_end_t[best_tm_i[j]], 0, zone));
-		icalcomponent_add_property(c[j], prop);
-		//16 for autosec.mminl.de and 15 for random number
-		//
-		char* uid = malloc(16+16);
-		strcpy(uid, "autosec.");
-    for(int i = 8; i < 8+15; i++) {
-        uid[i] = (rand() % 10) + '0';
-    }
-		strcat(uid, ".mminl.de");
-
-		prop = icalproperty_new_uid(uid);
-		icalcomponent_add_property(c[j], prop);
-		free(uid);
-		prop = icalproperty_new_summary("NEW TEST");
-		icalcomponent_add_property(c[j], prop);
-		icalproperty_free(prop);
-	}
-	free(possible_start_t);
-	free(possible_end_t);
-	free(pref);
-	return c;
+	//TODO
+	if(events_sum_len > n.length*60)
+		printf("WARNING: time is longer than wanted! Still accepting");
+	return true;
 }
+
 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
