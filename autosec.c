@@ -301,6 +301,7 @@ event_new(needs n, int *best_indeces_len)
 		icalcomponent_add_property(c[j], prop);
 		free(uid);
 	}
+	free(best_indeces);
 	free(poss_starts);
 	free(poss_ends);
 	free(prefs);
@@ -931,7 +932,13 @@ main(void)
 
 	free(n.disallowed);
 	free(n.preferred);
+	for(int i=0; i < events_count; i++)
+		icalcomponent_free(events[i]);
+	for(int i=0; i < revents_count; i++)
+		icalcomponent_free(revents[i]);
 	free(events);
+	free(revents);
+	free(event);
 	/*
 	prop = icalproperty_new_dtstamp(atime);
 	icalcomponent_add_property(event, prop);
