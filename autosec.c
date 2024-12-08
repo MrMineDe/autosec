@@ -108,12 +108,13 @@ init_datelist(datelist *d)
 void
 create_uid(char* uid)
 {
-	//16 for autosec.mminl.de and 15 for random number
+	//17 for autosec..mminl.de, 15 for random number and 1 for \0
 	uid[0] = '\0';
 	strcpy(uid, "autosec.");
   for(int i = 8; i < 8+15; i++) {
       uid[i] = (rand() % 10) + '0';
   }
+	uid[8+15] = '\0';
 	strcat(uid, ".mminl.de");
 }
 
@@ -181,52 +182,70 @@ icalcomponent **
 event_new(needs n, int *best_indeces_len)
 {
 	time_t *poss_starts, *poss_ends;
-	int *prefs;
+	float *prefs;
 	int *best_indeces;
-	//poss_starts_len/max is also the len/max of end_t and pref
-	uint poss_starts_len=0;
+	//poss_len/max is also the len/max of end_t and pref
+	uint poss_len=0;
 	uint poss_max_i=0;
+
+	// We start with 30 min search mode. See comment at the end of the while for more context.
+	int search_mode = 30;
+
 	time_t start_t, end_t;
-	start_t = n.earliest;
+	//We want to start at the corresponding search_mode start (e.g. 30: 0,30,60)
+	struct tm *t = gmtime(&n.earliest);
+	//We need to bump to the next minute, to get rid of the seconds
+	t->tm_sec = 0;
+	t->tm_min++;
+	t->tm_min += search_mode - (t->tm_min % search_mode);
+	//If we are over an hour in minutes we bump to a new hour.
+	//minute 0 of an hour is always legal, as search_mode has to be devidible by 60(so we can repeat every hour) CONSIDER making this even more flexible
+	//We can easily add an hour by converting to time_t and adding 3600sec
+	//Also initilise start_t with the final value
+	if(t->tm_min > 60){
+		t->tm_min = 0;
+		start_t = mktime(t);
+		start_t -= 3600;
+	} else {
+		start_t = mktime(t);
+	}
 	//TODO LATER This is not dynamic, we can only create events with a "pref" length
 	end_t = start_t+n.session_len_pref*60;
 	int alloc_base = (n.latest-end_t)/600;
 	int realloc_counter = 0;
-	// We start with 30 min search mode. See comment at the end of the while for more context.
-	int search_mode = 30;
 	while(end_t < n.latest){
 		if(timespan_is_ok(n, start_t, end_t)){
 			// If poss_starts etc. is not malloced enough, we needs to alloc more
-			if(poss_starts_len==poss_max_i){
+			if(poss_len==poss_max_i){
 				if(poss_max_i==0){
 					poss_starts = malloc(sizeof(time_t)*alloc_base);
 					poss_ends = malloc(sizeof(time_t)*alloc_base);
-					prefs = malloc(sizeof(int)*alloc_base);
+					prefs = malloc(sizeof(float)*alloc_base);
 					poss_max_i=alloc_base;
 				} else {
 					realloc_counter++;
 					poss_starts = realloc(poss_starts, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
 					poss_ends = realloc(poss_ends, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
-					prefs = realloc(prefs, sizeof(int)*(alloc_base*realloc_counter+poss_max_i));
+					prefs = realloc(prefs, sizeof(float)*(alloc_base*realloc_counter+poss_max_i));
 					poss_max_i+=alloc_base;
 					printf("Realloced to: %d, Time to Go: %ld\n", poss_max_i, n.latest-end_t);
 				}
 			}
 			//We want to store every possible time for the event to later get the most preferred
-			prefs[poss_starts_len] = timespan_pref(n, start_t, end_t);
-			poss_starts[poss_starts_len] = start_t;
-			poss_ends[poss_starts_len] = end_t;
-			poss_starts_len++;
+			prefs[poss_len] = timespan_pref(n, start_t, end_t);
+			poss_starts[poss_len] = start_t;
+			poss_ends[poss_len] = end_t;
+			poss_len++;
 		}
 		// We want to first search only every 30min, then every 15, then every 10, then every 5
 		// We hope, that most of the time we get enough "perfect" times in the first rounds
 		// That way we can make all of this between 30 to 10 times faster
 		start_t += search_mode * 60;
 		end_t += search_mode * 60;
-		if(end_t < n.latest){
+		if(end_t >= n.latest){
 			//We dont need to continue, if we have enough
-			best_indeces = malloc(sizeof(int)*poss_max_i);
-			if(find_best_time(n, poss_starts, poss_ends, prefs, poss_max_i, best_indeces, best_indeces_len)){
+			best_indeces = malloc(sizeof(int)*poss_len);
+			if(find_best_time(n, poss_starts, poss_ends, prefs, poss_len, best_indeces, best_indeces_len)){
 				//we found that a time is possible, but we only want to quit if the avg of pref is below our tolerance
 				int pref_avg = 0;
 				for(int i=0; i < *best_indeces_len; i++){
@@ -239,6 +258,7 @@ event_new(needs n, int *best_indeces_len)
 				if(pref_avg < WANTED_MAX_PREF_AVG)
 					break;
 			}
+			free(best_indeces);
 
 			//Count down the search modes, when mode=1 is done quit
 			if(search_mode == 30)
@@ -259,6 +279,7 @@ event_new(needs n, int *best_indeces_len)
 			end_t += search_mode * 60;
 		}
 	}
+	printf("Successfull search mode: %d\n", search_mode);
 
 	//Now we create the resulting events in c.
 	//We need to add start, end and uid for each event.
@@ -272,12 +293,13 @@ event_new(needs n, int *best_indeces_len)
 		prop = icalproperty_new_dtend(icaltime_from_timet_with_zone(poss_ends[best_indeces[j]], 0, zone));
 		icalcomponent_add_property(c[j], prop);
 		//Every event needs a custom UID that does not start with numbers
-		//16 for autosec.mminl.de and 15 for random number
-		char uid[32];
+		//17 for autosec..mminl.de, 15 for random number and 1 for \0
+		char *uid = malloc(sizeof(char)*33);
 		create_uid(uid);
 
 		prop = icalproperty_new_uid(uid);
 		icalcomponent_add_property(c[j], prop);
+		free(uid);
 	}
 	free(poss_starts);
 	free(poss_ends);
@@ -292,7 +314,7 @@ event_new(needs n, int *best_indeces_len)
 //TODO LATER This is not only not efficient, but also does not deliver good quality.
 //There may often be times where better overall times were available, but we were not able to find them.
 bool
-find_best_time(needs n, time_t *starts, time_t *ends, int *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len)
+find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len)
 {
 	//We want to first take the first best time.
 	//Then, based on that, we search for the next best time, that also is compatible with the first time.
@@ -326,12 +348,10 @@ find_best_time(needs n, time_t *starts, time_t *ends, int *prefs, int amount_pos
 			end_j_for:
 		}
 		//TODO Understand this and write a better comment
-		//Checks if anything as not overlapping. If everything overlapped, then we exit
-		if(i > 0){
-			if(best_indeces[i] == best_indeces[i-1]){
-				return false;
-			}
-		}
+		//Check if no valid time was found. If yes we dont have enough events_sum_len so we throw an error
+		if(best_indeces[i] == -1)
+			return false;
+
 		events_sum_len += ends[best_indeces[i]] - starts[best_indeces[i]];
 	}
 	*best_indeces_len = i;
@@ -468,6 +488,9 @@ time_is_in_datelist(datelist d, icaltimetype t)
 	  return false;
 
 	//TODO implement the year check. YOu cant check like all the others, bc year is stored in ultimate value as well (not bool)
+	// If the datelist is all false, then begin never got activated and the time cant be in the datelist
+	if(!begin)
+		return false;
 	//if all if's dont return false, then everything matches (the time is in the datelist!)
 	return true;
 }
@@ -827,12 +850,12 @@ main(void)
 		if(i < 7)
 			n.disallowed[0].wday[i] = false;
 		if(i < 12)
-			n.disallowed[0].month[i] = true;
+			n.disallowed[0].month[i] = false;
 		if(i < 31)
-			n.disallowed[0].mday[i] = true;
+			n.disallowed[0].mday[i] = false;
 		n.disallowed[0].minute[i] = false;
 	}
-	n.disallowed[0].wday[2] = true;
+	n.disallowed[0].wday[2] = false;
 	n.disallowed[0].min_all_f = is_array_false(n.disallowed[0].minute, 60);
 	n.disallowed[0].hour_all_f = is_array_false(n.disallowed[0].hour, 24);
 	n.disallowed[0].wday_all_f = is_array_false(n.disallowed[0].wday, 7);

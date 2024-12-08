@@ -12,7 +12,7 @@ void init_needs(needs *n, uint length, uint priority, uint session_length_min, u
 bool is_array_false(bool *a, int a_len);
 void icaltime_copy(icaltimetype *dest, icaltimetype src);
 icalcomponent ** event_new(needs n, int *best_indeces_len);
-bool find_best_time(needs n, time_t *starts, time_t *ends, int *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len);
+bool find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len);
 float timespan_pref(needs n, time_t start_t, time_t end_t);
 bool timespan_is_ok(needs n, time_t start_t, time_t end);
 bool time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t);
