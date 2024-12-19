@@ -249,9 +249,6 @@ event_new(needs n, int *best_indeces_len)
 				//we found that a time is possible, but we only want to quit if the avg of pref is below our tolerance
 				int pref_avg = 0;
 				for(int i=0; i < *best_indeces_len; i++){
-					//TODO STARTHERE debug further
-					//for some reason prefs[14] is -89234 or whatever, so not initialised.
-					//But there are over 400 elements according to poss_max_i...
 					pref_avg += prefs[best_indeces[i]];
 				}
 				pref_avg /= *best_indeces_len;
@@ -314,6 +311,13 @@ event_new(needs n, int *best_indeces_len)
 
 //TODO LATER This is not only not efficient, but also does not deliver good quality.
 //There may often be times where better overall times were available, but we were not able to find them.
+//
+//This is essentially the heart of the program. My current idea is, to have multiple algorithms which have different trade ofs between speed and quality
+//e.g. the highest quality would be a recursive tree function, that would try every possible combination, but i think thats like O(2^n) or smth crazy.
+//Other functions could be the current implementation with trying every different beginning and then always take the time with best pref value (idk how much better/worse this is compared to others)
+//Also just plain function as before, that just always takes the pref value
+//
+//The other thing is, that we can try to create SOME possible combination and then program functions to make the current combination better, this could be a better trade of for decent quality
 bool
 find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len)
 {
@@ -322,40 +326,54 @@ find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_p
 	//This is repeated until we meet the time requirements.
 	if(amount_possibles == 0)
 		return NULL;
-	uint events_sum_len = 0;
-	int i;
-	for(i=0; events_sum_len < n.length*60; i++){
-		best_indeces[i] = -1;
-		for(int j=0; j < amount_possibles; j++){
-			//We want to skip one instance of the for loop
-			//if we find an overlap or have the same index as an event beforehand.
-			//This is checked in the for loop with k
-			for(int k=0; k < i; k++){
-				if(timespans_ovlp(starts[best_indeces[k]],
-								  ends[best_indeces[k]],
-								  starts[j],
-								  ends[j])){
-					goto end_j_for;
-				}
-				if(j == best_indeces[k]){
-					goto end_j_for;
-		 		}
-			}
-			// init best_indeces[i] with the first valid time
-			if(best_indeces[i] == -1)
-				best_indeces[i] = j;
-			else if(prefs[j] < prefs[best_indeces[i]])
-				best_indeces[i] = j;
-			end_j_for:
-		}
-		//TODO Understand this and write a better comment
-		//Check if no valid time was found. If yes we dont have enough events_sum_len so we throw an error
-		if(best_indeces[i] == -1)
-			return false;
 
-		events_sum_len += ends[best_indeces[i]] - starts[best_indeces[i]];
+	//We store every possibility of combinations with different starting time
+	int best_indeces_cand[amount_possibles][amount_possibles];
+	int best_indeces_cand_len[amount_possibles];
+	uint events_sum_len_cand[amount_possibles];
+
+	for(int i=0; i < amount_possibles; i++){
+		// The first time is rotating with i, this means we dont start with the best time first all the time,
+		// we first take the first, then the second, third, etc.
+		best_indeces_cand[i][0] = i;
+		best_indeces_cand_len = 1;
+		events_sum_len_cand[i] = 0;
+		for(int j=j; events_sum_len_cand[i] < n.length*60; j++){
+			//We init with -1 and later fill it with the first valid time, then overwrite it with each better time
+			best_indeces_cand[i][j] = -1;
+			for(int k=0; k < amount_possibles; k++){
+				best_indeces_cand_len[i]++;
+				//We want to skip one instance of the for loop
+				//if we find an overlap or have the same index as an event beforehand.
+				//This is checked in the for loop with k
+				for(int l=0; l < j; l++){
+					if(timespans_ovlp(starts[best_indeces_cand[i][l]],
+								  		 ends[best_indeces_cand[i][l]],
+								  		 starts[k],
+								  		 ends[k])){
+						goto end_j_for;
+					}
+					if(k == best_indeces_cand[i][l]){
+						goto end_j_for;
+		 			}
+				}
+				// init best_indeces[i] with the first valid time
+				if(best_indeces[j] == -1)
+					best_indeces_cand[i][j] = k;
+				else if(prefs[k] < prefs[best_indeces_cand[i][j]])
+					best_indeces_cand[i][j] = k;
+			end_j_for:
+			}
+			//Check if no valid time was found. If yes we dont have enough events_sum_len so we throw an error
+			if(best_indeces[i][j] == -1)
+				break;
+
+			events_sum_len_cand[i] += ends[best_indeces_cand[i][j]] - starts[best_indeces_cand[i][j]];
+		}
 	}
-	*best_indeces_len = i;
+
+	//TODO now decide which best_indeces is the best one and return that
+
 	//If events_sum_len > n.length*60 müssen wir gucken wie wir am besten kürzen.
 	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
 	//Sonst irgendwie versuchen zwischen allen zu balancen.
@@ -365,6 +383,18 @@ find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_p
 	return true;
 }
 
+float
+timespan_arr_pref(needs n, time_t *starts, time_t *ends)
+{
+	//TODO STARTHERE
+	return 0.0;
+}
+
+float
+calendar_arr_pref(needs *n, time_t *starts, time_t *ends)
+{
+	return 0.0;
+}
 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
@@ -617,6 +647,7 @@ calendar_write_to_disk(icalcomponent **cal, int cal_len, char *path){
 	fprintf(f, "%s", ical_string);
 	fclose(f);
 
+	free(ical_string);
 	icalcomponent_free(rootc);
 	return true;
 }
@@ -760,6 +791,7 @@ needs
 string_to_needs(char *str)
 {
 	needs n;
+	printf("hallo\n");
 	char *disallowed_str = malloc(sizeof(char) * DATELIST_STRING_LEN * DISALLOWED_DATELIST_AMOUNT_MAX);
 	char *preferred_str = malloc(sizeof(datelist) * DATELIST_STRING_LEN * PREFERRED_DATELIST_AMOUNT_MAX);
 
