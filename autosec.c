@@ -229,19 +229,38 @@ event_new(needs n, int *best_indeces_len)
 	//Step 2
 	icalcomponent **events;
 	int events_len = 0;
-	events = calculate_events_based_on_chunks(n, chunk_00, chunk_00_len, &events_len);
+	if(calculate_events_based_on_chunks(n, chunk_00, chunk_00_index, &events, &events_len))
 	return NULL;
 }
 
 bool
-calculate_events_based_on_chunks(needs n, chunk *chunk_00, int chunk_00_index, icalcomponent **events, int *events_len)
+calculate_events_based_on_chunks(needs n, chunk *chunks, int chunks_len, icalcomponent ***events, int *events_len)
 {
 	//We try to respect all preferrences. We will disable them one by one later on if needed
 	int PREF_PER_ENABLED = true;
 	int PREF_DIST_ENABLED = true;
 	int PREF_LEN_ENABLED = true;
 
-	
+	int event_chunks_index[chunks_len];
+	int event_chunks_index_len = 0;
+
+	//We track the total length of all used chunks for the current events scheduling
+	int totallen = 0;
+	while(totallen <= n.length || (!PREF_PER_ENABLED && !PREF_DIST_ENABLED && !PREF_LEN_ENABLED)){
+		for(int i=0; i < chunks_len; i++){
+			int chunk_session_len = chunks[i].end-chunks[i].start;
+			//TODO STARTHERE
+			if(!PREF_LEN_ENABLED || (PREF_LEN_ENABLED && chunk_session_len > n.session_len_pref))
+				event_chunks_index[event_chunks_index_len] = i;
+		}
+		//disable the prefs one by one each iteration by one
+		if(PREF_LEN_ENABLED)
+			PREF_LEN_ENABLED = false;
+		else if(PREF_DIST_ENABLED)
+			PREF_DIST_ENABLED = false;
+		else if(PREF_PER_ENABLED)
+			PREF_PER_ENABLED = false;
+	}
 }
 
 //Calculate all the chunks for the different pref gradations

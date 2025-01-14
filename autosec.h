@@ -15,6 +15,7 @@ bool is_array_false(bool *a, int a_len);
 void icaltime_copy(icaltimetype *dest, icaltimetype src);
 icalcomponent ** event_new(needs n, int *best_indeces_len);
 
+bool calculate_events_based_on_chunks(needs n, chunk *chunk_00, int chunk_00_index, icalcomponent ***events, int *events_len);
 void calculate_chunks(needs n, chunk **chunk_00, int *chunk_00_index, chunk **chunk_02, int *chunk_02_index);
 icalcomponent* chunk_to_event(chunk c);
 
