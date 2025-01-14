@@ -1,6 +1,8 @@
 typedef struct datelist datelist;
 typedef struct needs needs;
+typedef struct chunk chunk;
 
+void copy_array_int(int *src, int *dest, int len);
 void split_string(char *str, int i, char *left, char *right);
 void init_datelist(datelist *d);
 void create_uid(char* uid);
@@ -12,13 +14,16 @@ void init_needs(needs *n, uint length, uint priority, uint session_length_min, u
 bool is_array_false(bool *a, int a_len);
 void icaltime_copy(icaltimetype *dest, icaltimetype src);
 icalcomponent ** event_new(needs n, int *best_indeces_len);
-bool find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len);
+
+void calculate_chunks(needs n, chunk **chunk_00, int *chunk_00_index, chunk **chunk_02, int *chunk_02_index);
+icalcomponent* chunk_to_event(chunk c);
+
 float timespan_pref(needs n, time_t start_t, time_t end_t);
-bool timespan_is_ok(needs n, time_t start_t, time_t end);
-bool time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t);
+int time_pref(needs n, time_t t);
+bool time_is_in_datelist_array(datelist *d, int d_len, time_t t);
 bool time_is_in_datelist(datelist d, icaltimetype t);
+bool time_is_in_calendar(time_t t);
 bool timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2);
-bool timespan_is_in_calendar(time_t start_t, time_t end_t);
 int search_nearest_event(int start_index, int index_change, time_t t_start);
 int events_compare_helper(const void *c1, const void *c2);
 int revents_compare_helper(const void *c1, const void *c2);

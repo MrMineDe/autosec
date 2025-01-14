@@ -76,6 +76,22 @@ needs{
 	//icalcomponent execute_before; //the needs tasks should be executed after execute_before
 };
 
+struct
+chunk
+{
+	time_t start;
+	time_t end;
+};
+
+//deep copy an int array
+void
+copy_array_int(int *src, int *dest, int len)
+{
+	for(int i=0; i < len; i++){
+		dest[i] = src[i];
+	}
+}
+
 //Cut after i characters
 void
 splitString(char *str, int i, char *left, char *right)
@@ -176,195 +192,140 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 }
 
 // Here we want to analyze everything about a new event and make it into a event
-// We return NULL if we couldnt find any possible time TODO This needs to be refactored eventually.
+// We return NULL if we couldnt find any possible time
 // the icalcomponent **c array of pointers is returned with a "library malloc", so it has to be freed, by the calling function!
 icalcomponent **
 event_new(needs n, int *best_indeces_len)
 {
-	time_t *poss_starts, *poss_ends;
-	float *prefs;
-	int *best_indeces;
-	//poss_len/max is also the len/max of end_t and pref
-	uint poss_len=0;
-	uint poss_max_i=0;
+	//Finding the right chunks for the event is key. We do this in a 2 step process
+	//1. calculate all possible chunks for every pref threshold (e.g. 0.0, 0.2)
+	//every chunk under that threshold is in the respective chunk array.
+	//2. try to find a combination of best times for every chunk array.
+	//First try the 0.0 pref chunks, if that works exit. Otherwise repeat with 0.2, etc.
+	//2.1 There are several key things in arranging times that have impact on chunk_pref and overall pref:
+	//pref per day/week etc, pref_dist, session_len_pref and maybe more in the future
+	//To accord for these we first try with everything enabled, then disable them one by one/combine them.
+	//2.2 When we found a functioning compromise with prefs disabled and enabled we try
+	//to recover some of the disabled prefs by rearranging times and lengths were possible
 
-	// We start with 30 min search mode. See comment at the end of the while for more context.
-	int search_mode = 30;
+	//Step 1
+	chunk *chunk_00, *chunk_02;
+	int chunk_00_index, chunk_02_index;
+	calculate_chunks(n, &chunk_00, &chunk_00_index, &chunk_02, &chunk_02_index);
 
-	time_t start_t, end_t;
-	//We want to start at the corresponding search_mode start (e.g. 30: 0,30,60)
-	struct tm *t = gmtime(&n.earliest);
-	//We need to bump to the next minute, to get rid of the seconds
-	t->tm_sec = 0;
-	t->tm_min++;
-	t->tm_min += search_mode - (t->tm_min % search_mode);
-	//If we are over an hour in minutes we bump to a new hour.
-	//minute 0 of an hour is always legal, as search_mode has to be devidible by 60(so we can repeat every hour) CONSIDER making this even more flexible
-	//We can easily add an hour by converting to time_t and adding 3600sec
-	//Also initilise start_t with the final value
-	if(t->tm_min > 60){
-		t->tm_min = 0;
-		start_t = mktime(t);
-		start_t -= 3600;
-	} else {
-		start_t = mktime(t);
+	icalcomponent **event_00 = malloc(chunk_00_index * sizeof(icalcomponent*));
+	icalcomponent **event_02 = malloc(chunk_02_index * sizeof(icalcomponent*));
+
+	for(int i=0; i < chunk_00_index; i++){
+		event_00[i] = chunk_to_event(chunk_00[i]);
 	}
-	//TODO LATER This is not dynamic, we can only create events with a "pref" length
-	end_t = start_t+n.session_len_pref*60;
-	int alloc_base = (n.latest-end_t)/600;
-	int realloc_counter = 0;
-	while(end_t < n.latest){
-		if(timespan_is_ok(n, start_t, end_t)){
-			// If poss_starts etc. is not malloced enough, we needs to alloc more
-			if(poss_len==poss_max_i){
-				if(poss_max_i==0){
-					poss_starts = malloc(sizeof(time_t)*alloc_base);
-					poss_ends = malloc(sizeof(time_t)*alloc_base);
-					prefs = malloc(sizeof(float)*alloc_base);
-					poss_max_i=alloc_base;
-				} else {
-					realloc_counter++;
-					poss_starts = realloc(poss_starts, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
-					poss_ends = realloc(poss_ends, sizeof(time_t)*(alloc_base*realloc_counter+poss_max_i));
-					prefs = realloc(prefs, sizeof(float)*(alloc_base*realloc_counter+poss_max_i));
-					poss_max_i+=alloc_base;
-					printf("Realloced to: %d, Time to Go: %ld\n", poss_max_i, n.latest-end_t);
-				}
-			}
-			//We want to store every possible time for the event to later get the most preferred
-			prefs[poss_len] = timespan_pref(n, start_t, end_t);
-			poss_starts[poss_len] = start_t;
-			poss_ends[poss_len] = end_t;
-			poss_len++;
-		}
-		// We want to first search only every 30min, then every 15, then every 10, then every 5
-		// We hope, that most of the time we get enough "perfect" times in the first rounds
-		// That way we can make all of this between 30 to 10 times faster
-		start_t += search_mode * 60;
-		end_t += search_mode * 60;
-		if(end_t >= n.latest){
-			//We dont need to continue, if we have enough
-			best_indeces = malloc(sizeof(int)*poss_len);
-			if(find_best_time(n, poss_starts, poss_ends, prefs, poss_len, best_indeces, best_indeces_len)){
-				//we found that a time is possible, but we only want to quit if the avg of pref is below our tolerance
-				int pref_avg = 0;
-				for(int i=0; i < *best_indeces_len; i++){
-					//TODO STARTHERE debug further
-					//for some reason prefs[14] is -89234 or whatever, so not initialised.
-					//But there are over 400 elements according to poss_max_i...
-					pref_avg += prefs[best_indeces[i]];
-				}
-				pref_avg /= *best_indeces_len;
-				if(pref_avg < WANTED_MAX_PREF_AVG)
-					break;
-			}
-			free(best_indeces);
 
-			//Count down the search modes, when mode=1 is done quit
-			if(search_mode == 30)
-				search_mode = 15;
-			else if(search_mode == 15)
-				search_mode = 10;
-			else if(search_mode == 10)
-				search_mode = 5;
-			else if(search_mode == 5)
-				search_mode = 1;
-			else
-				break;
-
-			//reset the time, but skip the first date, as we did it already in the first round
-			start_t = n.earliest;
-			end_t = start_t+n.session_len_pref*60;
-			start_t += search_mode * 60;
-			end_t += search_mode * 60;
-		}
+	for(int i=0; i < chunk_02_index; i++){
+		event_02[i] = chunk_to_event(chunk_02[i]);
 	}
-	printf("Successfull search mode: %d\n", search_mode);
+	calendar_write_to_disk(event_00, chunk_00_index, "chunk_00.ics");
+	calendar_write_to_disk(event_02, chunk_02_index, "chunk_02.ics");
 
-	//Now we create the resulting events in c.
-	//We need to add start, end and uid for each event.
-	icalproperty *prop;
-	icalcomponent **c = malloc(sizeof(icalproperty *)*(*best_indeces_len));
-	for(int j=0; j < *best_indeces_len; j++){
-		c[j] = icalcomponent_new(ICAL_VEVENT_COMPONENT);
-		prop = icalproperty_new_dtstart(icaltime_from_timet_with_zone(poss_starts[best_indeces[j]], 0, zone));
-		icalcomponent_add_property(c[j], prop);
-		icalproperty_free(prop);
-		prop = icalproperty_new_dtend(icaltime_from_timet_with_zone(poss_ends[best_indeces[j]], 0, zone));
-		icalcomponent_add_property(c[j], prop);
-		//Every event needs a custom UID that does not start with numbers
-		//17 for autosec..mminl.de, 15 for random number and 1 for \0
-		char *uid = malloc(sizeof(char)*33);
-		create_uid(uid);
-
-		prop = icalproperty_new_uid(uid);
-		icalcomponent_add_property(c[j], prop);
-		free(uid);
-	}
-	free(best_indeces);
-	free(poss_starts);
-	free(poss_ends);
-	free(prefs);
-	return c;
+	//Step 2
+	icalcomponent **events;
+	int events_len = 0;
+	events = calculate_events_based_on_chunks(n, chunk_00, chunk_00_len, &events_len);
+	return NULL;
 }
 
-//@ret false if there is no combination of times, that fit.
-//best_indeces is an array, which should be initialised with amount_possibles elements
-//best_indeces_len is a pointer to a int
-
-//TODO LATER This is not only not efficient, but also does not deliver good quality.
-//There may often be times where better overall times were available, but we were not able to find them.
 bool
-find_best_time(needs n, time_t *starts, time_t *ends, float *prefs, int amount_possibles, int *best_indeces, int *best_indeces_len)
+calculate_events_based_on_chunks(needs n, chunk *chunk_00, int chunk_00_index, icalcomponent **events, int *events_len)
 {
-	//We want to first take the first best time.
-	//Then, based on that, we search for the next best time, that also is compatible with the first time.
-	//This is repeated until we meet the time requirements.
-	if(amount_possibles == 0)
-		return NULL;
-	uint events_sum_len = 0;
-	int i;
-	for(i=0; events_sum_len < n.length*60; i++){
-		best_indeces[i] = -1;
-		for(int j=0; j < amount_possibles; j++){
-			//We want to skip one instance of the for loop
-			//if we find an overlap or have the same index as an event beforehand.
-			//This is checked in the for loop with k
-			for(int k=0; k < i; k++){
-				if(timespans_ovlp(starts[best_indeces[k]],
-								  ends[best_indeces[k]],
-								  starts[j],
-								  ends[j])){
-					goto end_j_for;
-				}
-				if(j == best_indeces[k]){
-					goto end_j_for;
-		 		}
-			}
-			// init best_indeces[i] with the first valid time
-			if(best_indeces[i] == -1)
-				best_indeces[i] = j;
-			else if(prefs[j] < prefs[best_indeces[i]])
-				best_indeces[i] = j;
-			end_j_for:
-		}
-		//TODO Understand this and write a better comment
-		//Check if no valid time was found. If yes we dont have enough events_sum_len so we throw an error
-		if(best_indeces[i] == -1)
-			return false;
+	//We try to respect all preferrences. We will disable them one by one later on if needed
+	int PREF_PER_ENABLED = true;
+	int PREF_DIST_ENABLED = true;
+	int PREF_LEN_ENABLED = true;
 
-		events_sum_len += ends[best_indeces[i]] - starts[best_indeces[i]];
-	}
-	*best_indeces_len = i;
-	//If events_sum_len > n.length*60 müssen wir gucken wie wir am besten kürzen.
-	//Am besten zuerst plain bei einem alles, falls möglich und gucken ob das noch ok wäre.
-	//Sonst irgendwie versuchen zwischen allen zu balancen.
-	//TODO
-	if(events_sum_len > n.length*60)
-		printf("WARNING: time is longer than wanted! Still accepting");
-	return true;
+	
 }
 
+//Calculate all the chunks for the different pref gradations
+//@ret return the chunks in chunk_00, chunk_02 etc and the size of the chunks
+void
+calculate_chunks(needs n, chunk **chunk_00, int *chunk_00_index, chunk **chunk_02, int *chunk_02_index)
+{
+	//Guess how many chunks in the arrays (chunk_00, chunk_02, ...) are
+	#define CHUNKARRAY_START_SIZE 100
+
+	//This tracks if we are on a streak with the timechunks (e.g. 0.0 pref, 0.2 pref etc.) aka was the last time in the timechunk
+	int chunk_00_active = false;
+	int chunk_02_active = false;
+
+	*chunk_00 = malloc(CHUNKARRAY_START_SIZE * sizeof(chunk));
+	*chunk_02 = malloc(CHUNKARRAY_START_SIZE * sizeof(chunk));
+
+	int chunk_00_maxsize = CHUNKARRAY_START_SIZE;
+	int chunk_02_maxsize = CHUNKARRAY_START_SIZE;
+
+	*chunk_00_index = 0;
+	*chunk_02_index = 0;
+
+	//Check the pref value for every minute and categories timespans accordingly in different gradations(abstuffungen)
+	for(time_t i=n.earliest; i < n.latest; i++){
+		//if the time is not allowed we end all current active chunks
+		//We only save those chunks that are >=session_len_min
+		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, i) || time_is_in_calendar(i)){
+			if(chunk_00_active == true){
+				if(i - (*chunk_00)[*chunk_00_index].start >= n.session_len_min)
+					(*chunk_00)[(*chunk_00_index)++].end = i;
+				chunk_00_active = false;
+			}
+			if(chunk_02_active == true){
+				if(i - (*chunk_02)[*chunk_02_index].start >= n.session_len_min)
+					(*chunk_02)[(*chunk_02_index)++].end = i;
+				chunk_02_active = false;
+			}
+		} else {
+			int pref = time_pref(n, i);
+			//if the time is allowed we get the pref value and check if the chunks are not started.
+			//if they are not started we start them and fill the start with i.
+			//If the are already started we have to do nothing, as we only need to fill the end, and that is done above or at the end
+			if(pref <= 0 && chunk_00_active == false){
+				if(*chunk_00_index == chunk_00_maxsize){
+					*chunk_00 = realloc(*chunk_00, chunk_00_maxsize*2 * sizeof(chunk));
+					chunk_00_maxsize *= 2;
+				}
+				(*chunk_00)[*chunk_00_index].start = i;
+				chunk_00_active = true;
+			}
+			if(pref <= 2 && chunk_02_active == false){
+				if(*chunk_02_index == chunk_02_maxsize){
+					(*chunk_02) = realloc(*chunk_02, chunk_02_maxsize*2 * sizeof(chunk));
+					chunk_02_maxsize *= 2;
+				}
+				(*chunk_02)[*chunk_02_index].start = i;
+				chunk_02_active = true;
+			}
+		}
+	}
+	//at the end we have to check if chunks are still active. If yes deactivate them
+	if(chunk_00_active == true){
+		(*chunk_00)[(*chunk_00_index)++].end = n.latest;
+		chunk_00_active = false;
+	}
+	if(chunk_02_active == true){
+		(*chunk_02)[(*chunk_02_index)++].end = n.latest;
+		chunk_02_active = false;
+	}
+}
+
+//@ret a new icalcomponent. the caller has to free it!
+icalcomponent*
+chunk_to_event(chunk c)
+{
+	icalcomponent *event = icalcomponent_new(ICAL_VEVENT_COMPONENT);
+	icalproperty *p;
+	p = icalproperty_new_dtstart(icaltime_from_timet_with_zone(c.start, false, zone));
+	icalcomponent_add_property(event, p);
+	p = icalproperty_new_dtend(icaltime_from_timet_with_zone(c.end, false, zone));
+	icalcomponent_add_property(event, p);
+	return event;
+}
 
 //Gibt eine Zahl zurück, die als Preferenz gesehen werden kann, je kleiner die Zahl, desto besser
 float
@@ -387,7 +348,7 @@ timespan_pref(needs n, time_t start, time_t end)
 	//TODO LATER maybe be more precise and allow "partial" in datelist to also be better.
 	float datelist_pref_val = 0;
 	for(int i=0; i < session_len/60 && n.preferred_len != 0; i++){
-		if(!time_is_in_datelist_array(n.preferred, n.preferred_len, icaltime_from_timet_with_zone(start+60*i, false, zone)))
+		if(!time_is_in_datelist_array(n.preferred, n.preferred_len, start+60*i))
 			datelist_pref_val = 1.0;
 	}
 	//time is on 10:20:30:40:50, best is 30 or 00
@@ -410,40 +371,26 @@ timespan_pref(needs n, time_t start, time_t end)
 	return length_val + datelist_pref_val + position_val + near_start_val;
 }
 
-// We want to check, if we could add a item at that timespan.
-// This includes but is not limited to:
-// - disallowed times
-// - already existing calendar items
-// - minimal time requirements are met (length, time, etc.)
-bool
-timespan_is_ok(needs n, time_t start, time_t end)
+//calculate pref value of a specific time
+int
+time_pref(needs n, time_t t)
 {
-	// Checks:
-	// - disallowed
-	// - in calendar
-	if(timespan_is_in_calendar(start, end))
-		return false;
-	time_t time_temp;
-	for(time_temp = start; time_temp < end; time_temp += 60)
-	{
-		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, icaltime_from_timet_with_zone(time_temp, 0, zone)))
-			return false;
-	}
-	// Check:
-	// - time requirements are met
-	time_t len = end - start;
-	if(len < n.session_len_min*60 || len > n.session_len_max*60)
-		return false;
-	return true;
+	//For now everything is worth 2, this should later be changeable by config (and maybe also change defaults later on)
+	//We start with 2, as if the time is preferred its better, so we have to subtract 2. we dont want values under 0 i think
+	int pref = 2;
+	if(time_is_in_datelist_array(n.preferred, n.preferred_len, t))
+		pref -= 2;
+	//TODO LATER add more pref arguments if needed
+	return pref;
 }
 
-
-// This checks if a time t is not applicable because it is contained in one of the disallowed timespans
+// This checks if a time t is contained in one of the datelists d
 bool
-time_is_in_datelist_array(datelist *d, int d_len, icaltimetype t)
+time_is_in_datelist_array(datelist *d, int d_len, time_t t)
 {
+	icaltimetype time = icaltime_from_timet_with_zone(t, false, zone);
 	for(int i=0; i < d_len; i++){
-		if(time_is_in_datelist(d[i], t))
+		if(time_is_in_datelist(d[i], time))
 			return true;
 	}
 	return false;
@@ -496,6 +443,31 @@ time_is_in_datelist(datelist d, icaltimetype t)
 	return true;
 }
 
+//calculate if the given time is in one of the loaded events/revents
+//TODO inefficient, maybe store all events in a min buffer/chunk buffer that is easier/faster to check (we have to do many checks)
+//TODO revents is not included yet, not sure how to implement, add until t is bigger than the start?
+bool
+time_is_in_calendar(time_t t)
+{
+	for(int i=0; i < events_count; i++){
+		icalproperty *cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
+		icalproperty *cend = icalcomponent_get_first_property(events[i], ICAL_DTEND_PROPERTY);
+		icalproperty *cduration = icalcomponent_get_first_property(events[i], ICAL_DURATION_PROPERTY);
+		time_t startt, endt;
+		startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
+		if(cend == NULL){
+			struct icaldurationtype duration = icalproperty_get_duration(cduration);
+			endt = startt + (time_t)icaldurationtype_as_int(duration);
+		} else {
+			endt = icaltime_as_timet(icalproperty_get_dtstart(cend));
+		}
+
+		if(startt <= t && endt >= t)
+			return true;
+	}
+	return false;
+}
+
 bool
 timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2)
 {
@@ -506,73 +478,6 @@ timespans_ovlp(time_t start1, time_t end1, time_t start2, time_t end2)
 	if(end1 < start2 || end2 < start1)
 		return false;
 	return true;
-}
-
-// This checks if a time t is not applicable because at that time the calendar already contains an event
-bool
-timespan_is_in_calendar(time_t start_t, time_t end_t)
-{
-	//search for the nearest event
-	int near_ind = search_nearest_event(events_count/2, events_count/2+1, start_t);
-	//Search in both directions
-	icalproperty *cstart = icalcomponent_get_first_property(events[near_ind], ICAL_DTSTART_PROPERTY);
-	icalproperty *cend = icalcomponent_get_first_property(events[near_ind], ICAL_DTEND_PROPERTY);
-	time_t near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-	time_t near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
-	//first search <- back
-	//We want to check until we are sure, that further back no event can reach start_t.
-	//This unfortunately means, that we have to store events_longest the whole time, just for this check...
-	for(int i=near_ind; i > 0 && start_t-near_endt < events_longest; i--){
-		//fill near_startt/near_endt for new element
-		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
-		cend = icalcomponent_get_first_property(events[i], ICAL_DTEND_PROPERTY);
-		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-		near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
-		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
-			return true;
-	}
-	for(int i=near_ind; i < events_count && near_startt < end_t; i++){
-		//fill near_startt/near_endt for new element
-		cstart = icalcomponent_get_first_property(events[i], ICAL_DTSTART_PROPERTY);
-		cend = icalcomponent_get_first_property(events[i], ICAL_DTEND_PROPERTY);
-		near_startt = icaltime_as_timet(icalproperty_get_dtstart(cstart));
-		near_endt = icaltime_as_timet(icalproperty_get_dtend(cend));
-		if(timespans_ovlp(start_t, end_t, near_startt, near_endt))
-			return true;
-	}
-
-	return false;
-}
-
-//TODO LATER rewrite this at some point
-int
-search_nearest_event(int start_index, int index_change, time_t t_start)
-{
-	//Best search algo i've every written \s
-	
-	//In the recursion we dont check, if start_index is out of bounce. We do it here
-	if(start_index > events_count-1 || start_index < 0)
-		return start_index - index_change;
-
-	icalproperty *c = icalcomponent_get_first_property(events[start_index], ICAL_DTSTART_PROPERTY);
-	icaltimetype t = icalproperty_get_dtstart(c);
-	time_t event_start = icaltime_as_timet(t);
-
-	
-	if(event_start > t_start){
-		if(index_change == 1){
-			if(start_index == 0)
-				return start_index;
-			return start_index-1;
-		}
-		return search_nearest_event(start_index-index_change/2, index_change/2, t_start);
-	}
-	if(event_start < t_start){
-		if(index_change == 1)
-			return start_index;
-		return search_nearest_event(start_index+index_change/2, index_change/2, t_start);
-	}
-	return start_index;
 }
 
 //Helper, that compares the date of 2 components. Needed for qsort(), in calendar_load_from_disk() and potentially other occurrences
@@ -851,12 +756,12 @@ main(void)
 		if(i < 7)
 			n.disallowed[0].wday[i] = false;
 		if(i < 12)
-			n.disallowed[0].month[i] = false;
+			n.disallowed[0].month[i] = true;
 		if(i < 31)
-			n.disallowed[0].mday[i] = false;
+			n.disallowed[0].mday[i] = true;
 		n.disallowed[0].minute[i] = false;
 	}
-	n.disallowed[0].wday[2] = false;
+	n.disallowed[0].wday[2] = true;
 	n.disallowed[0].min_all_f = is_array_false(n.disallowed[0].minute, 60);
 	n.disallowed[0].hour_all_f = is_array_false(n.disallowed[0].hour, 24);
 	n.disallowed[0].wday_all_f = is_array_false(n.disallowed[0].wday, 7);
