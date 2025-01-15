@@ -241,17 +241,48 @@ calculate_events_based_on_chunks(needs n, chunk *chunks, int chunks_len, icalcom
 	int PREF_DIST_ENABLED = true;
 	int PREF_LEN_ENABLED = true;
 
-	int event_chunks_index[chunks_len];
-	int event_chunks_index_len = 0;
+	chunk chunk_events[int(n.length/n.session_len_min + 1)];
+	int chunk_events_index = 0;
 
 	//We track the total length of all used chunks for the current events scheduling
 	int totallen = 0;
 	while(totallen <= n.length || (!PREF_PER_ENABLED && !PREF_DIST_ENABLED && !PREF_LEN_ENABLED)){
 		for(int i=0; i < chunks_len; i++){
 			int chunk_session_len = chunks[i].end-chunks[i].start;
-			//TODO STARTHERE
-			if(!PREF_LEN_ENABLED || (PREF_LEN_ENABLED && chunk_session_len > n.session_len_pref))
-				event_chunks_index[event_chunks_index_len] = i;
+			events[chunk_events_index].start = chunks[i].start;
+			if(!PREF_LEN_ENABLED)
+				if(chunk_session_len < n.session_len_pref){
+					events[chunk_events_index].end = chunks[i].end;
+					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+				} else {
+					events[chunk_events_index].end = chunks[i].start + n.session_len_pref;
+					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+				}
+			if(PREF_LEN_ENABLED && chunk_session_len >= n.session_len_pref){
+					events[chunk_events_index].end = chunks[i].start + n.session_len_pref;
+					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+			}
+			//We want to increase i only when going go the next chunk.
+			//We do not by default go to the next chunk however, because we only cut parts out for a session.
+			//Check if the chunk is still big enough for another session
+			//cut the extracted event from chunks[i]
+			chunks[i].start = events[chunk_events_index].end;
+			if(chunks[i].end-chunks[i].start >= n.session_len_pref)
+				i--;
+
+
+			//Now we disable all further times based on PREF_DIST and PREF_PER if enabled
+			//TODO LATER
+			/*
+			if(PREF_DIST_ENABLED){
+				delete_timespan_from_chunk_array
+			}
+			*/
+		}
+		//Now we get to the second part of making the times better again, by making it abide the closest to the prefs disabled
+		//However we only do that, if we got enough totallen of the chunk_events
+		if(totallen >= n.length){
+			
 		}
 		//disable the prefs one by one each iteration by one
 		if(PREF_LEN_ENABLED)
@@ -260,6 +291,17 @@ calculate_events_based_on_chunks(needs n, chunk *chunks, int chunks_len, icalcom
 			PREF_DIST_ENABLED = false;
 		else if(PREF_PER_ENABLED)
 			PREF_PER_ENABLED = false;
+	}
+}
+
+//TODO LATER this needs to rearrange arr completely
+void
+delete_chunk_from_chunk_array(chunk *arr, chunk arrlen, chunk deletechunk)
+{
+	for(int i=0; i < arrlen; i++){
+		if(timespans_ovlp(arr[i].start, arr[i].end, deletechunk.start, deletechunk.end)){
+			
+		}
 	}
 }
 
