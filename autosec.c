@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "lib/libical/include/libical/ical.h"
 #include "lib/libical/include/libical/icalcomponent.h"
@@ -227,63 +228,125 @@ event_new(needs n, int *best_indeces_len)
 	calendar_write_to_disk(event_02, chunk_02_index, "chunk_02.ics");
 
 	//Step 2
-	icalcomponent **events;
-	int events_len = 0;
-	if(calculate_events_based_on_chunks(n, chunk_00, chunk_00_index, &events, &events_len))
+	chunk *sessions;
+	int sessions_len = 0;
+	sessions = calculate_sessions_based_on_chunks(n, chunk_00, chunk_00_index, &sessions_len);
+
+	icalcomponent **events = malloc(sessions_len * sizeof(icalcomponent*));
+	for(int i=0; i < sessions_len; i++){
+		events[i] = chunk_to_event(sessions[i]);
+	}
+	calendar_write_to_disk(events, sessions_len, "sessions.ics");
 	return NULL;
 }
 
-bool
-calculate_events_based_on_chunks(needs n, chunk *chunks, int chunks_len, icalcomponent ***events, int *events_len)
+chunk *
+calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *sessions_len)
 {
 	//We try to respect all preferrences. We will disable them one by one later on if needed
-	int PREF_PER_ENABLED = true;
-	int PREF_DIST_ENABLED = true;
-	int PREF_LEN_ENABLED = true;
+	bool PREF_PER_ENABLED = true;
+	bool PREF_DIST_ENABLED = true;
+	bool PREF_LEN_ENABLED = true;
 
-	chunk chunk_events[int(n.length/n.session_len_min + 1)];
-	int chunk_events_index = 0;
+	//we init sessions for most possible amount of sessions
+	int sessions_maxsize = (n.length/n.session_len_min)+1;
+	chunk *sessions = malloc(sessions_maxsize * sizeof(chunk));
+	*sessions_len = 0;
 
-	//We track the total length of all used chunks for the current events scheduling
+	//We track the total length of all used chunks for the current sessions scheduling
 	int totallen = 0;
 	while(totallen <= n.length || (!PREF_PER_ENABLED && !PREF_DIST_ENABLED && !PREF_LEN_ENABLED)){
-		for(int i=0; i < chunks_len; i++){
-			int chunk_session_len = chunks[i].end-chunks[i].start;
-			events[chunk_events_index].start = chunks[i].start;
-			if(!PREF_LEN_ENABLED)
-				if(chunk_session_len < n.session_len_pref){
-					events[chunk_events_index].end = chunks[i].end;
-					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+		int i=0;
+		//We go through every chunk. We only move on if the chunk is too small to contain another event
+		for(i=0; i < chunks_len && totallen < n.length; i++){
+			//we know that every chunk is at least n.session_len_min long and therefor we write the start here already.
+			//If we skip this chunk because of preference next iteration of for will just overwrite
+			sessions[*sessions_len].start = chunks[i].start;
+			if(!PREF_LEN_ENABLED){
+				if(chunk_len(chunks[i]) < n.session_len_pref*60){
+					sessions[*sessions_len].end = chunks[i].end;
+					totallen += chunk_len(sessions[*sessions_len]);
 				} else {
-					events[chunk_events_index].end = chunks[i].start + n.session_len_pref;
-					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+					sessions[*sessions_len].end = chunks[i].start + n.session_len_pref*60;
+					totallen += chunk_len(sessions[*sessions_len]);
 				}
-			if(PREF_LEN_ENABLED && chunk_session_len >= n.session_len_pref){
-					events[chunk_events_index].end = chunks[i].start + n.session_len_pref;
-					totallen = events[chunk_events_index].end - events[chunk_events_index].start;
+			}
+			if(PREF_LEN_ENABLED && chunk_len(chunks[i])>= n.session_len_pref*60){
+					sessions[*sessions_len].end = chunks[i].start + n.session_len_pref*60;
+					totallen += chunk_len(sessions[*sessions_len]);
+			} else {
+				//if we branch here we do not want to add a session in this for iteration. We skip all steps and go to the next one
+				continue;
 			}
 			//We want to increase i only when going go the next chunk.
 			//We do not by default go to the next chunk however, because we only cut parts out for a session.
 			//Check if the chunk is still big enough for another session
 			//cut the extracted event from chunks[i]
-			chunks[i].start = events[chunk_events_index].end;
-			if(chunks[i].end-chunks[i].start >= n.session_len_pref)
+			chunks[i].start = sessions[*sessions_len].end;
+			if(chunk_len(chunks[i]) >= n.session_len_pref*60)
 				i--;
 
+			(*sessions_len)++;
 
-			//Now we disable all further times based on PREF_DIST and PREF_PER if enabled
-			//TODO LATER
-			/*
-			if(PREF_DIST_ENABLED){
-				delete_timespan_from_chunk_array
-			}
-			*/
+			//TODO Now we disable all further times based on PREF_DIST and PREF_PER if enabled
 		}
 		//Now we get to the second part of making the times better again, by making it abide the closest to the prefs disabled
-		//However we only do that, if we got enough totallen of the chunk_events
-		if(totallen >= n.length){
-			
+		//However we only do that, if we got enough totallen of the sessions
+	
+		//Here we check if we have unchecked chunks left, which could be better fits than the selected chunks
+		while(i < chunks_len && totallen >= n.length){
+			//the worst index is always the smallest because we never make sessions longer than n.session_len_pref
+			int worst_i = smallest_chunk(sessions, *sessions_len);
+			//Check if the not yet checked chunks[i] is better then the worst element selected.
+			//If yes, swap them (but max n.session_len_pref)
+			if(n.session_len_pref*60 - chunk_len(chunks[i]) <
+			   n.session_len_pref*60 - chunk_len(sessions[worst_i])){
+				sessions[worst_i].start = chunks[i].start;
+				sessions[worst_i].end = chunks[i].end;
+				//if chunks[i] is longer than n.session_len_pref make the event only n.session_len_pref long
+				if(chunk_len(chunks[i]) > n.session_len_pref*60){
+					sessions[worst_i].end = sessions[worst_i].start + n.session_len_pref*60;
+				}
+				chunks[i].start = sessions[worst_i].end;
+			}
+
+			i++;
 		}
+
+		//TODO Here we check if we covered good chunks. We look if the covered chunks are better than the covering.
+		//We also have to check if the new chunks would cover other chunks, especially chunks used.
+		//Then we have to calculate if changing out the chunks is a good idea or not
+
+
+		//TODO Here we try to have most events inside / partially inside the best possible time_pref zone.
+		//This is still a big problem! We dont pass the zones(the function doesnt know..), I dont know how to calculate this
+
+		//if totallen > n.length we have to cut down on the lengths of events
+		//and if possible remove events completely until totallen = n.length
+		while(totallen > n.length){
+			int worst_i = smallest_chunk(sessions, *sessions_len);
+			if(totallen-chunk_len(sessions[worst_i]) >= n.length){
+				sessions[worst_i].start = sessions[*sessions_len-1].start;
+				sessions[worst_i].end = sessions[*sessions_len-1].end;
+				sessions_len--;
+			} else {
+				//TODO DECIDE (maybe config) if we want to split up the overlength on all big events or cut few as short as needed/possible
+				//TODO "highly" inefficient, but i dont have a good way of getting the second biggest right now.
+				int biggest_i = biggest_chunk(sessions, *sessions_len);
+				if(totallen-10 < n.length){
+					sessions[biggest_i].end -= n.length - totallen;
+					totallen -= n.length - totallen;
+				} else {
+					sessions[biggest_i].end -= 10;
+					totallen -= 10;
+				}
+			}
+		}
+
+		//if we got the perfect length everything worked and we can finish
+		if(totallen == n.length)
+			break;
+
 		//disable the prefs one by one each iteration by one
 		if(PREF_LEN_ENABLED)
 			PREF_LEN_ENABLED = false;
@@ -292,9 +355,46 @@ calculate_events_based_on_chunks(needs n, chunk *chunks, int chunks_len, icalcom
 		else if(PREF_PER_ENABLED)
 			PREF_PER_ENABLED = false;
 	}
+	return sessions;
+}
+
+//returns the index of the smallest chunk in an chunk array
+int
+smallest_chunk(chunk *arr, int arrlen)
+{
+	if(arrlen == 0)
+		return -1;
+	int smallest = 0;
+	for(int i=0; i < arrlen; i++){
+		if(chunk_len(arr[i]) < chunk_len(arr[smallest]))
+			smallest = i;
+	}
+	return smallest;
+}
+
+//returns the index of the smallest chunk in an chunk array
+int
+biggest_chunk(chunk *arr, int arrlen)
+{
+	if(arrlen == 0)
+		return -1;
+	int biggest = 0;
+	for(int i=0; i < arrlen; i++){
+		if(chunk_len(arr[i]) > chunk_len(arr[biggest]))
+			biggest = i;
+	}
+	return biggest;
+}
+
+//returns the length of a chunk
+int
+chunk_len(chunk c)
+{
+	return c.end - c.start;
 }
 
 //TODO LATER this needs to rearrange arr completely
+/*
 void
 delete_chunk_from_chunk_array(chunk *arr, chunk arrlen, chunk deletechunk)
 {
@@ -304,6 +404,7 @@ delete_chunk_from_chunk_array(chunk *arr, chunk arrlen, chunk deletechunk)
 		}
 	}
 }
+*/
 
 //Calculate all the chunks for the different pref gradations
 //@ret return the chunks in chunk_00, chunk_02 etc and the size of the chunks
@@ -332,12 +433,12 @@ calculate_chunks(needs n, chunk **chunk_00, int *chunk_00_index, chunk **chunk_0
 		//We only save those chunks that are >=session_len_min
 		if(time_is_in_datelist_array(n.disallowed, n.disallowed_len, i) || time_is_in_calendar(i)){
 			if(chunk_00_active == true){
-				if(i - (*chunk_00)[*chunk_00_index].start >= n.session_len_min)
+				if(i - (*chunk_00)[*chunk_00_index].start >= n.session_len_min*60)
 					(*chunk_00)[(*chunk_00_index)++].end = i;
 				chunk_00_active = false;
 			}
 			if(chunk_02_active == true){
-				if(i - (*chunk_02)[*chunk_02_index].start >= n.session_len_min)
+				if(i - (*chunk_02)[*chunk_02_index].start >= n.session_len_min*60)
 					(*chunk_02)[(*chunk_02_index)++].end = i;
 				chunk_02_active = false;
 			}
