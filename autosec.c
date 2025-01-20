@@ -231,6 +231,7 @@ event_new(needs n, int *best_indeces_len)
 	chunk *sessions;
 	int sessions_len = 0;
 	sessions = calculate_sessions_based_on_chunks(n, chunk_00, chunk_00_index, &sessions_len);
+	//sessions = calculate_sessions_based_on_chunks(n, chunk_02, chunk_00_index, &sessions_len);
 
 	icalcomponent **events = malloc(sessions_len * sizeof(icalcomponent*));
 	for(int i=0; i < sessions_len; i++){
@@ -254,9 +255,10 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 	*sessions_len = 0;
 
 	//We track the total length of all used chunks for the current sessions scheduling
-	int totallen = 0;
-	while(totallen <= n.length || (!PREF_PER_ENABLED && !PREF_DIST_ENABLED && !PREF_LEN_ENABLED)){
+	while(PREF_PER_ENABLED || PREF_DIST_ENABLED || PREF_LEN_ENABLED){
 		int i=0;
+		int totallen = 0;
+		*sessions_len = 0;
 		//We go through every chunk. We only move on if the chunk is too small to contain another event
 		for(i=0; i < chunks_len && totallen < n.length; i++){
 			//we know that every chunk is at least n.session_len_min long and therefor we write the start here already.
@@ -265,15 +267,15 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 			if(!PREF_LEN_ENABLED){
 				if(chunk_len(chunks[i]) < n.session_len_pref*60){
 					sessions[*sessions_len].end = chunks[i].end;
-					totallen += chunk_len(sessions[*sessions_len]);
+					totallen += chunk_len(sessions[*sessions_len])/60;
 				} else {
 					sessions[*sessions_len].end = chunks[i].start + n.session_len_pref*60;
-					totallen += chunk_len(sessions[*sessions_len]);
+					totallen += n.session_len_pref;
 				}
 			}
-			if(PREF_LEN_ENABLED && chunk_len(chunks[i])>= n.session_len_pref*60){
+			else if(PREF_LEN_ENABLED && chunk_len(chunks[i])>= n.session_len_pref*60){
 					sessions[*sessions_len].end = chunks[i].start + n.session_len_pref*60;
-					totallen += chunk_len(sessions[*sessions_len]);
+					totallen += n.session_len_pref;
 			} else {
 				//if we branch here we do not want to add a session in this for iteration. We skip all steps and go to the next one
 				continue;
@@ -294,7 +296,7 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 		//However we only do that, if we got enough totallen of the sessions
 	
 		//Here we check if we have unchecked chunks left, which could be better fits than the selected chunks
-		while(i < chunks_len && totallen >= n.length){
+		while(!PREF_LEN_ENABLED && i < chunks_len && totallen >= n.length){
 			//the worst index is always the smallest because we never make sessions longer than n.session_len_pref
 			int worst_i = smallest_chunk(sessions, *sessions_len);
 			//Check if the not yet checked chunks[i] is better then the worst element selected.
@@ -325,7 +327,8 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 		//and if possible remove events completely until totallen = n.length
 		while(totallen > n.length){
 			int worst_i = smallest_chunk(sessions, *sessions_len);
-			if(totallen-chunk_len(sessions[worst_i]) >= n.length){
+			if(totallen-chunk_len(sessions[worst_i])/60 >= n.length){
+				totallen -= chunk_len(sessions[worst_i])/60;
 				sessions[worst_i].start = sessions[*sessions_len-1].start;
 				sessions[worst_i].end = sessions[*sessions_len-1].end;
 				sessions_len--;
@@ -467,11 +470,13 @@ calculate_chunks(needs n, chunk **chunk_00, int *chunk_00_index, chunk **chunk_0
 	}
 	//at the end we have to check if chunks are still active. If yes deactivate them
 	if(chunk_00_active == true){
-		(*chunk_00)[(*chunk_00_index)++].end = n.latest;
+		if(n.latest - (*chunk_00)[*chunk_00_index].start >= n.session_len_min*60)
+			(*chunk_00)[(*chunk_00_index)++].end = n.latest;
 		chunk_00_active = false;
 	}
 	if(chunk_02_active == true){
-		(*chunk_02)[(*chunk_02_index)++].end = n.latest;
+		if(n.latest - (*chunk_02)[*chunk_02_index].start >= n.session_len_min*60)
+			(*chunk_02)[(*chunk_02_index)++].end = n.latest;
 		chunk_02_active = false;
 	}
 }
@@ -908,7 +913,7 @@ main(void)
 	time_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 900, 0, 300, 300, 300, earliest, earliest+60*60*24*3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 2000, 0, 100, 300, 300, earliest, earliest+60*60*24*3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
