@@ -6,7 +6,7 @@ import random
 c = Calendar()
 
 # Starting date for events
-start_date = datetime(2025, 1, 17, 0, 0, 0)
+start_date = datetime(2025, 1, 22, 0, 0, 0)
 
 # Generate 1500 random events
 for i in range(10):

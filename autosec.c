@@ -192,10 +192,7 @@ icaltime_copy(icaltimetype *dest, icaltimetype src)
 	dest->zone = src.zone; //TODO HACK I think this is not allowed, as I copy a structure-pointer only
 }
 
-// Here we want to analyze everything about a new event and make it into a event
-// We return NULL if we couldnt find any possible time
-// the icalcomponent **c array of pointers is returned with a "library malloc", so it has to be freed, by the calling function!
-icalcomponent **
+bool
 event_new(needs n, int *best_indeces_len)
 {
 	//Finding the right chunks for the event is key. We do this in a 2 step process
@@ -231,23 +228,29 @@ event_new(needs n, int *best_indeces_len)
 	chunk *sessions;
 	int sessions_len = 0;
 	sessions = calculate_sessions_based_on_chunks(n, chunk_00, chunk_00_index, &sessions_len);
-	//sessions = calculate_sessions_based_on_chunks(n, chunk_02, chunk_00_index, &sessions_len);
+	if(sessions == NULL)
+		sessions = calculate_sessions_based_on_chunks(n, chunk_02, chunk_02_index, &sessions_len);
+	if(sessions == NULL)
+		return false;
 
 	icalcomponent **events = malloc(sessions_len * sizeof(icalcomponent*));
 	for(int i=0; i < sessions_len; i++){
 		events[i] = chunk_to_event(sessions[i]);
 	}
 	calendar_write_to_disk(events, sessions_len, "sessions.ics");
-	return NULL;
+
+	return true;
 }
 
 chunk *
-calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *sessions_len)
+calculate_sessions_based_on_chunks(needs n, chunk *chunks_orig, int chunks_len, int *sessions_len)
 {
 	//We try to respect all preferrences. We will disable them one by one later on if needed
 	bool PREF_PER_ENABLED = true;
 	bool PREF_DIST_ENABLED = true;
 	bool PREF_LEN_ENABLED = true;
+
+	chunk *chunks = malloc(chunks_len * sizeof(chunk));
 
 	//we init sessions for most possible amount of sessions
 	int sessions_maxsize = (n.length/n.session_len_min)+1;
@@ -256,6 +259,8 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 
 	//We track the total length of all used chunks for the current sessions scheduling
 	while(PREF_PER_ENABLED || PREF_DIST_ENABLED || PREF_LEN_ENABLED){
+		//we want to reset the chunks every time
+		memcpy(chunks, chunks_orig, chunks_len*sizeof(chunk));
 		int i=0;
 		int totallen = 0;
 		*sessions_len = 0;
@@ -285,7 +290,7 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 			//Check if the chunk is still big enough for another session
 			//cut the extracted event from chunks[i]
 			chunks[i].start = sessions[*sessions_len].end;
-			if(chunk_len(chunks[i]) >= n.session_len_pref*60)
+			if(chunk_len(chunks[i]) >= n.session_len_min*60)
 				i--;
 
 			(*sessions_len)++;
@@ -337,28 +342,62 @@ calculate_sessions_based_on_chunks(needs n, chunk *chunks, int chunks_len, int *
 				//TODO "highly" inefficient, but i dont have a good way of getting the second biggest right now.
 				int biggest_i = biggest_chunk(sessions, *sessions_len);
 				if(totallen-10 < n.length){
-					sessions[biggest_i].end -= n.length - totallen;
-					totallen -= n.length - totallen;
+					sessions[biggest_i].end -= (totallen - n.length)*60;
+					totallen -= totallen - n.length;
 				} else {
-					sessions[biggest_i].end -= 10;
+					sessions[biggest_i].end -= 10*60;
 					totallen -= 10;
 				}
 			}
 		}
 
-		//if we got the perfect length everything worked and we can finish
-		if(totallen == n.length)
-			break;
-
-		//disable the prefs one by one each iteration by one
+		//We disable the prefs one by one just in case we need to repeat
 		if(PREF_LEN_ENABLED)
 			PREF_LEN_ENABLED = false;
 		else if(PREF_DIST_ENABLED)
 			PREF_DIST_ENABLED = false;
 		else if(PREF_PER_ENABLED)
 			PREF_PER_ENABLED = false;
+		//If totallen != n.length we have to try again with the previously disabled pref
+		if(totallen != n.length)
+			continue;
+	
+		//Otherwise we finetune the sessions a bit more:
+
+
+		//Now we shift the sessions to the most forward position possible (the shortening could have messed with this)
+		qsort(sessions, *sessions_len, sizeof(chunk), chunk_compare_qsort);
+		for(int j=0; j < *sessions_len; j++){
+			for(int k=0; k < chunks_len; k++){
+				//Check if we got the chunk the session is in
+				if(sessions[j].start > chunks_orig[k].end)
+					continue;
+				if(sessions[j].start < chunks_orig[k].start)
+					break;
+				//if(sessions[i].start >= chunks[i].start && sessions[i].end <= chunks[i].end)
+				//if we got the first session there can not be a blocking session before it
+				//therefor we can just take the minimum, aka the beginning of the chunk
+				int diff;
+				if(j == 0)
+					diff = sessions[j].start - chunks_orig[k].start;
+				else {
+					diff = sessions[j].start - (sessions[j-1].end);
+					if(chunks_orig[k].start > sessions[j-1].end)
+						diff = sessions[j].start - chunks_orig[k].start;
+				}
+				sessions[j].start -= diff;
+				sessions[j].end -= diff;
+				break;
+			}
+		}
+
+		//if we got the perfect length everything worked and we can finish
+		if(totallen == n.length)
+			return sessions;
+
+		//disable the prefs one by one each iteration by one
 	}
-	return sessions;
+	return NULL;
 }
 
 //returns the index of the smallest chunk in an chunk array
@@ -394,6 +433,12 @@ int
 chunk_len(chunk c)
 {
 	return c.end - c.start;
+}
+
+int
+chunk_compare_qsort(const void* a, const void *b)
+{
+	return ((chunk*)a)->start - ((chunk*)b)->start;
 }
 
 //TODO LATER this needs to rearrange arr completely
@@ -740,6 +785,7 @@ calendar_load_from_disk(char *path)
 	qsort(events, events_count, sizeof(icaltimetype*), events_compare_helper);
 	qsort(revents, revents_count, sizeof(icaltimetype*), revents_compare_helper);
 
+	/*
 	for(int i=0; i < events_count; i++){
 		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(events[i]));
 	}
@@ -748,6 +794,7 @@ calendar_load_from_disk(char *path)
 	for(int i=0; i < revents_count; i++){
 		printf("Nr.%d\n%s\n\n", i+1, icalcomponent_as_ical_string(revents[i]));
 	}
+	*/
 	icalcomponent_free(rootc);
 	return true;
 }
@@ -913,7 +960,7 @@ main(void)
 	time_t earliest;
 	time(&earliest);
 	needs n;
-	init_needs(&n, 2000, 0, 100, 300, 300, earliest, earliest+60*60*24*3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+	init_needs(&n, 2100, 0, 100, 300, 300, earliest, earliest+60*60*24*3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
 	n.disallowed = malloc(sizeof(datelist));
 	init_datelist(n.disallowed);
 	n.disallowed_len = 1;
@@ -968,13 +1015,13 @@ main(void)
 	}
 
 	int event_len;
-	icalcomponent **event = event_new(n, &event_len);
-	if(event == NULL){
+	if(!event_new(n, &event_len)){
 		printf("Couldnt find a time for you. Sorry!\n");
 		exit(1);
 	}
-
+	printf("Successfully found a time!\n");
 	
+	/*
 	char *needs_name = "EXAMPLE_NAME";
 	for(int i=0; i < event_len; i++){
 		icalproperty *groupname = icalproperty_new(ICAL_CATEGORIES_PROPERTY);
@@ -988,7 +1035,6 @@ main(void)
     icalcomponent_add_property(event[i], xneeds);
 		icalproperty_free(xneeds);
 	}
-	
 
 	calendar_write_to_disk(events, events_count, "events_o.ics");
 	calendar_write_to_disk(revents, revents_count, "revents_o.ics");
@@ -1001,6 +1047,7 @@ main(void)
 		icalcomponent_free(event[i]);
 	}
 
+	*/
 
 	free(n.disallowed);
 	free(n.preferred);
@@ -1010,7 +1057,6 @@ main(void)
 		icalcomponent_free(revents[i]);
 	free(events);
 	free(revents);
-	free(event);
 	/*
 	prop = icalproperty_new_dtstamp(atime);
 	icalcomponent_add_property(event, prop);
